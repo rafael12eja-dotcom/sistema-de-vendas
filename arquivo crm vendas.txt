@@ -1,0 +1,732 @@
+import { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithCustomToken, signInAnonymously } from 'firebase/auth';
+import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query, addDoc, getDocs, deleteDoc, updateDoc } from 'firebase/firestore';
+import { format, parseISO } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+
+// Definindo o tipo de dado para a venda e a visita
+interface Venda {
+  id: string;
+  nomeCliente: string;
+  dataFesta: string;
+  dataFechamento: string;
+  numConvidados: string;
+  formaPagamento: string;
+  valorFesta: number;
+  comissao: number;
+  pg: string;
+}
+
+interface Visita {
+    id: string;
+    nomeCliente: string;
+    dataVisita: string;
+    horaVisita: string;
+}
+
+// Dados iniciais das planilhas para preencher o sistema na primeira vez
+const initialData = {
+  'Julho': [
+    { nomeCliente: 'Thais', dataFesta: '2026-03-21', dataFechamento: '2025-07-22', numConvidados: '70+10', formaPagamento: '6x Cartão', valorFesta: 12555, comissao: 251.1, pg: 'Não Informado' },
+    { nomeCliente: 'A', dataFesta: '2025-09-14', dataFechamento: '2025-07-23', numConvidados: '50+10', formaPagamento: 'Não Informado', valorFesta: 12150, comissao: 243, pg: 'Não Informado' },
+    { nomeCliente: 'B', dataFesta: '2025-12-13', dataFechamento: '2025-07-25', numConvidados: '80+10', formaPagamento: '50% e 50%', valorFesta: 17423, comissao: 348.46, pg: 'Não Informado' },
+    { nomeCliente: 'C', dataFesta: '2026-01-28', dataFechamento: '2025-07-30', numConvidados: '60+10', formaPagamento: '6x Cartão', valorFesta: 15000, comissao: 300, pg: 'Não Informado' },
+    { nomeCliente: 'D', dataFesta: '2025-11-21', dataFechamento: '2025-07-30', numConvidados: '50+10', formaPagamento: 'Não Informado', valorFesta: 11875, comissao: 237.5, pg: 'Não Informado' },
+    { nomeCliente: 'E', dataFesta: '2025-12-14', dataFechamento: '2025-07-31', numConvidados: '50+10', formaPagamento: 'Não Informado', valorFesta: 11875, comissao: 237.5, pg: 'Não Informado' },
+    { nomeCliente: 'F', dataFesta: '2025-11-01', dataFechamento: '2025-07-31', numConvidados: '70+10', formaPagamento: 'Não Informado', valorFesta: 14535, comissao: 290.7, pg: 'Não Informado' },
+  ],
+  'Agosto': [
+    { nomeCliente: 'Celso Tafuri', dataFesta: '2026-03-07', dataFechamento: '2025-08-04', numConvidados: '60+10', formaPagamento: '40% +4x no Pix', valorFesta: 13950, comissao: 279, pg: 'PG' },
+    { nomeCliente: 'Gabriela', dataFesta: '2025-11-08', dataFechamento: '2025-08-05', numConvidados: '50+10', formaPagamento: 'Á vista', valorFesta: 12268.8, comissao: 245.38, pg: 'PG' },
+    { nomeCliente: 'João Guilherme', dataFesta: '2025-10-13', dataFechamento: '2025-08-07', numConvidados: '70+10', formaPagamento: '50% e % 50%', valorFesta: 11564, comissao: 231.28, pg: 'PG' },
+    { nomeCliente: 'Isabela', dataFesta: '2025-10-28', dataFechamento: '2025-08-08', numConvidados: '60+40', formaPagamento: 'à vista', valorFesta: 13635, comissao: 272.7, pg: 'PG' },
+    { nomeCliente: 'Marina', dataFesta: '2025-10-18', dataFechamento: '2025-08-11', numConvidados: '60+10', formaPagamento: '50% e % 50%', valorFesta: 12555, comissao: 251.1, pg: 'PG' },
+    { nomeCliente: 'Fernanda Melo', dataFesta: '2025-08-27', dataFechamento: '2025-08-11', numConvidados: '90+10', formaPagamento: '30% + 6x', valorFesta: 12000, comissao: 240, pg: 'PG' },
+    { nomeCliente: 'Camila', dataFesta: '2025-09-20', dataFechamento: '2025-08-12', numConvidados: '50+10', formaPagamento: 'á VISTA', valorFesta: 11795, comissao: 235.9, pg: 'PG' },
+    { nomeCliente: 'Marina', dataFesta: '2025-12-11', dataFechamento: '2025-08-13', numConvidados: '70+10', formaPagamento: 'à vista', valorFesta: 11563.2, comissao: 231.26, pg: 'PG' },
+    { nomeCliente: 'Alice', dataFesta: '2025-12-14', dataFechamento: '2025-08-13', numConvidados: '50+10', formaPagamento: '6x', valorFesta: 13700, comissao: 274, pg: 'PG' },
+    { nomeCliente: 'Ana Paula / Gabriel', dataFesta: '2025-01-26', dataFechamento: '2025-08-19', numConvidados: '90+10', formaPagamento: '50% e 50%', valorFesta: 13908, comissao: 278.16, pg: 'PG' },
+    { nomeCliente: 'Ana Paula / Mateus', dataFesta: '2025-05-23', dataFechamento: '2025-08-19', numConvidados: '90+10', formaPagamento: '50% e 50%', valorFesta: 12000, comissao: 240, pg: 'PG' },
+    { nomeCliente: 'Amanda', dataFesta: '2025-11-15', dataFechamento: '2025-08-21', numConvidados: '70+10', formaPagamento: 'à vista', valorFesta: 14436, comissao: 288.72, pg: 'PG' },
+    { nomeCliente: 'Patrícia', dataFesta: '2025-10-05', dataFechamento: '2025-08-25', numConvidados: '70+10', formaPagamento: '6x', valorFesta: 15000, comissao: 300, pg: 'PG' },
+  ],
+  'Setembro': [],
+  'Outubro': [],
+  'Novembro': [],
+  'Dezembro': [],
+};
+
+// Funções utilitárias para cálculos
+const formatCurrency = (value: number) => {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+};
+
+// Componente principal da aplicação
+export default function App() {
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+  const [userId, setUserId] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [vendas, setVendas] = useState<Venda[]>([]);
+  const [visitasAgendadas, setVisitasAgendadas] = useState<Visita[]>([]);
+  const [novaVenda, setNovaVenda] = useState({
+    nomeCliente: '',
+    dataFesta: '',
+    dataFechamento: '',
+    numConvidados: '',
+    formaPagamento: '',
+    valorFesta: '',
+  });
+  const [novaVisita, setNovaVisita] = useState({
+      nomeCliente: '',
+      dataVisita: '',
+      horaVisita: '',
+  });
+  const [visitaSendoEditada, setVisitaSendoEditada] = useState<Visita | null>(null);
+  const [confirmacaoExclusao, setConfirmacaoExclusao] = useState<string | null>(null);
+
+  const [mesSelecionado, setMesSelecionado] = useState('');
+
+  const SALARIO_FIXO = 2100;
+  const DESCONTO_INSS = 252;
+  const DESCONTO_PASSAGEM = SALARIO_FIXO * 0.06;
+
+  const meses = ['Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+
+  // Função para inicializar o Firebase
+  useEffect(() => {
+    async function initFirebase() {
+      try {
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const app = initializeApp(firebaseConfig);
+        const firestore = getFirestore(app);
+        const authInstance = getAuth(app);
+
+        setDb(firestore);
+        setAuth(authInstance);
+
+        const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
+        if (token) {
+          await signInWithCustomToken(authInstance, token);
+        } else {
+          await signInAnonymously(authInstance);
+        }
+      } catch (e) {
+        console.error("Erro ao inicializar Firebase ou autenticar:", e);
+        setIsLoading(false);
+      }
+    }
+    initFirebase();
+  }, []);
+
+  // Listener para o estado de autenticação e dados
+  useEffect(() => {
+    if (auth) {
+      const unsubscribe = auth.onAuthStateChanged(async (user) => {
+        if (user) {
+          setUserId(user.uid);
+          const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+          
+          // Verifica e inicializa os dados de vendas se necessário
+          const vendasCollectionRef = collection(db, 'artifacts', appId, 'users', user.uid, 'vendas');
+          const vendasDocs = await getDocs(vendasCollectionRef);
+          if (vendasDocs.empty) {
+            for (const mes in initialData) {
+              for (const venda of initialData[mes]) {
+                await addDoc(vendasCollectionRef, venda);
+              }
+            }
+          }
+          
+          // Listener para dados de vendas
+          const salesUnsubscribe = onSnapshot(vendasCollectionRef, (querySnapshot) => {
+            const vendasList: Venda[] = [];
+            querySnapshot.forEach((doc) => {
+              const data = doc.data();
+              vendasList.push({
+                id: doc.id,
+                nomeCliente: data.nomeCliente,
+                dataFesta: data.dataFesta,
+                dataFechamento: data.dataFechamento,
+                numConvidados: data.numConvidados,
+                formaPagamento: data.formaPagamento,
+                valorFesta: parseFloat(data.valorFesta),
+                comissao: parseFloat(data.comissao),
+                pg: data.pg,
+              });
+            });
+            const sortedVendas = vendasList.sort((a, b) => {
+                const dateA = new Date(a.dataFechamento);
+                const dateB = new Date(b.dataFechamento);
+                return dateB.getTime() - dateA.getTime();
+            });
+            setVendas(sortedVendas);
+            setIsLoading(false);
+          }, (error) => {
+            console.error("Erro ao obter dados de vendas em tempo real:", error);
+            setIsLoading(false);
+          });
+
+          // Listener para dados de visitas
+          const visitasCollectionRef = collection(db, 'artifacts', appId, 'users', user.uid, 'visitas');
+          const visitasUnsubscribe = onSnapshot(visitasCollectionRef, (querySnapshot) => {
+            const visitasList: Visita[] = [];
+            querySnapshot.forEach((doc) => {
+                const data = doc.data();
+                visitasList.push({
+                    id: doc.id,
+                    nomeCliente: data.nomeCliente,
+                    dataVisita: data.dataVisita,
+                    horaVisita: data.horaVisita,
+                });
+            });
+            const sortedVisitas = visitasList.sort((a, b) => {
+                const dateA = new Date(`${a.dataVisita}T${a.horaVisita}`);
+                const dateB = new Date(`${b.dataVisita}T${b.horaVisita}`);
+                return dateA.getTime() - dateB.getTime();
+            });
+            setVisitasAgendadas(sortedVisitas);
+          }, (error) => {
+              console.error("Erro ao obter dados de visitas em tempo real:", error);
+          });
+
+          return () => {
+              salesUnsubscribe();
+              visitasUnsubscribe();
+          };
+        } else {
+          setIsLoading(false);
+        }
+      });
+      return () => unsubscribe();
+    }
+  }, [auth, db]);
+  
+  // Define o mês inicial como o mês atual quando os dados carregam
+  useEffect(() => {
+    if (!isLoading && vendas.length > 0 && !mesSelecionado) {
+      const mesAtual = format(new Date(), 'MMMM', { locale: ptBR });
+      const mesCapitalizado = mesAtual.charAt(0).toUpperCase() + mesAtual.slice(1);
+      if (meses.includes(mesCapitalizado)) {
+          setMesSelecionado(mesCapitalizado);
+      } else {
+          const dataMaisRecente = vendas[0].dataFechamento;
+          const mesMaisRecente = format(parseISO(dataMaisRecente), 'MMMM', { locale: ptBR });
+          setMesSelecionado(mesMaisRecente.charAt(0).toUpperCase() + mesMaisRecente.slice(1));
+      }
+    }
+  }, [isLoading, vendas, mesSelecionado]);
+
+  // Função para adicionar uma nova venda
+  const adicionarNovaVenda = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!db || !userId) {
+      console.error("Banco de dados ou ID do usuário não disponível.");
+      return;
+    }
+
+    const comissao = parseFloat(novaVenda.valorFesta) * 0.02;
+
+    try {
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+      const vendasCollectionRef = collection(db, 'artifacts', appId, 'users', userId, 'vendas');
+      await addDoc(vendasCollectionRef, {
+        nomeCliente: novaVenda.nomeCliente,
+        dataFesta: novaVenda.dataFesta,
+        dataFechamento: novaVenda.dataFechamento,
+        numConvidados: novaVenda.numConvidados,
+        formaPagamento: novaVenda.formaPagamento,
+        valorFesta: parseFloat(novaVenda.valorFesta),
+        comissao: comissao,
+        pg: 'Não Informado',
+      });
+      setNovaVenda({
+        nomeCliente: '',
+        dataFesta: '',
+        dataFechamento: '',
+        numConvidados: '',
+        formaPagamento: '',
+        valorFesta: '',
+      });
+    } catch (e) {
+      console.error("Erro ao adicionar documento: ", e);
+    }
+  };
+  
+  // Função para adicionar uma nova visita
+  const adicionarVisita = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!db || !userId) {
+          console.error("Banco de dados ou ID do usuário não disponível.");
+          return;
+      }
+      
+      try {
+          const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+          const visitasCollectionRef = collection(db, 'artifacts', appId, 'users', userId, 'visitas');
+          await addDoc(visitasCollectionRef, {
+              nomeCliente: novaVisita.nomeCliente,
+              dataVisita: novaVisita.dataVisita,
+              horaVisita: novaVisita.horaVisita,
+          });
+          setNovaVisita({
+              nomeCliente: '',
+              dataVisita: '',
+              horaVisita: '',
+          });
+      } catch (e) {
+          console.error("Erro ao adicionar visita: ", e);
+      }
+  };
+
+  // Funções para editar uma visita
+  const handleEditarVisita = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!visitaSendoEditada || !db || !userId) return;
+
+    try {
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+      const docRef = doc(db, 'artifacts', appId, 'users', userId, 'visitas', visitaSendoEditada.id);
+      await updateDoc(docRef, {
+        nomeCliente: visitaSendoEditada.nomeCliente,
+        dataVisita: visitaSendoEditada.dataVisita,
+        horaVisita: visitaSendoEditada.horaVisita,
+      });
+      setVisitaSendoEditada(null); // Fecha o formulário de edição
+    } catch (e) {
+      console.error("Erro ao atualizar visita: ", e);
+    }
+  };
+
+  // Funções para remover uma visita
+  const handleRemoverVisita = async () => {
+    if (!confirmacaoExclusao || !db || !userId) return;
+    
+    try {
+      const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+      const docRef = doc(db, 'artifacts', appId, 'users', userId, 'visitas', confirmacaoExclusao);
+      await deleteDoc(docRef);
+      setConfirmacaoExclusao(null); // Fecha a confirmação
+    } catch (e) {
+      console.error("Erro ao remover visita: ", e);
+    }
+  };
+
+  // Funções para calcular os resumos
+  const calcularResumo = () => {
+    const resumoMensal: { [key: string]: { totalVendido: number; comissaoTotal: number; contratosFechados: number; } } = {};
+    const resumoAnual = { totalVendido: 0, comissaoTotal: 0, totalLiquido: 0, contratosFechados: 0 };
+
+    meses.forEach(mes => {
+      resumoMensal[mes] = { totalVendido: 0, comissaoTotal: 0, contratosFechados: 0 };
+    });
+
+    vendas.forEach(venda => {
+      const dataFechamento = parseISO(venda.dataFechamento);
+      const mes = format(dataFechamento, 'MMMM', { locale: ptBR });
+      const mesCapitalizado = mes.charAt(0).toUpperCase() + mes.slice(1);
+
+      if (resumoMensal[mesCapitalizado]) {
+        resumoMensal[mesCapitalizado].totalVendido += venda.valorFesta;
+        resumoMensal[mesCapitalizado].comissaoTotal += venda.comissao;
+        resumoMensal[mesCapitalizado].contratosFechados += 1;
+      }
+    });
+
+    resumoAnual.totalVendido = Object.values(resumoMensal).reduce((sum, mes) => sum + mes.totalVendido, 0);
+    resumoAnual.comissaoTotal = Object.values(resumoMensal).reduce((sum, mes) => sum + mes.comissaoTotal, 0);
+    resumoAnual.contratosFechados = Object.values(resumoMensal).reduce((sum, mes) => sum + mes.contratosFechados, 0);
+    
+    const salarioComComissao = SALARIO_FIXO * 6 + resumoAnual.comissaoTotal;
+    const totalDescontos = DESCONTO_PASSAGEM * 6 + DESCONTO_INSS * 6;
+    resumoAnual.totalLiquido = salarioComComissao - totalDescontos;
+    
+    return { resumoMensal, resumoAnual };
+  };
+
+  const { resumoMensal, resumoAnual } = calcularResumo();
+
+  // Dados para o gráfico
+  const chartData = Object.keys(resumoMensal).map(mes => ({
+    name: mes.slice(0, 3),
+    'Total Vendido': resumoMensal[mes].totalVendido,
+    'Comissão Total': resumoMensal[mes].comissaoTotal,
+  }));
+
+  // Filtra as vendas pelo mês selecionado
+  const vendasDoMes = vendas.filter(venda => {
+    const dataFechamento = parseISO(venda.dataFechamento);
+    const mes = format(dataFechamento, 'MMMM', { locale: ptBR });
+    return mes.charAt(0).toUpperCase() + mes.slice(1) === mesSelecionado;
+  });
+
+  // Renderiza a aplicação
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200">
+        <div className="flex flex-col items-center">
+          <div className="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
+          <p className="mt-4 text-lg font-medium">Carregando dados...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-100 p-4 font-sans text-gray-800">
+      <div className="max-w-7xl mx-auto">
+        <header className="mb-8">
+          <h1 className="text-4xl font-extrabold text-blue-800 mb-2">Painel de Vendas</h1>
+          <p className="text-gray-600">Seu sistema interativo para gerenciar vendas, comissões e agendamentos.</p>
+          <p className="mt-2 text-sm text-gray-500">ID do usuário: {userId}</p>
+        </header>
+
+        {/* Seção de Resumo Anual */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 mb-8">
+          <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
+            <h2 className="text-xl font-semibold text-gray-700">Total Vendido Anual</h2>
+            <p className="mt-1 text-3xl font-bold text-blue-600">{formatCurrency(resumoAnual.totalVendido)}</p>
+          </div>
+          <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
+            <h2 className="text-xl font-semibold text-gray-700">Comissão Total Anual</h2>
+            <p className="mt-1 text-3xl font-bold text-green-600">{formatCurrency(resumoAnual.comissaoTotal)}</p>
+          </div>
+          <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
+            <h2 className="text-xl font-semibold text-gray-700">Valor Líquido Estimado</h2>
+            <p className="mt-1 text-3xl font-bold text-purple-600">{formatCurrency(resumoAnual.totalLiquido)}</p>
+          </div>
+        </div>
+
+        {/* Seção de Metas */}
+        <div className="bg-white p-6 rounded-2xl shadow-lg mb-8">
+          <h2 className="text-2xl font-bold text-gray-700 mb-4">Progresso das Metas</h2>
+          <div className="space-y-4">
+            {[{ meta: 200000, label: 'Meta 1 (R$200k)' }, { meta: 250000, label: 'Meta 2 (R$250k)' }, { meta: 300000, label: 'Meta 3 (R$300k)' }].map((metaItem) => {
+              const progress = Math.min((resumoAnual.totalVendido / metaItem.meta) * 100, 100);
+              return (
+                <div key={metaItem.label}>
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-lg font-medium text-gray-600">{metaItem.label}</span>
+                    <span className="text-sm font-semibold text-blue-600">{progress.toFixed(1)}%</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-3.5">
+                    <div className="bg-blue-500 h-3.5 rounded-full transition-all duration-500 ease-out" style={{ width: `${progress}%` }}></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Gráfico de Vendas e Comissão */}
+        <div className="bg-white p-6 rounded-2xl shadow-lg mb-8">
+          <h2 className="text-2xl font-bold text-gray-700 mb-4">Vendas e Comissão por Mês</h2>
+          <ResponsiveContainer width="100%" height={300}>
+            <BarChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" />
+              <YAxis />
+              <Tooltip formatter={(value, name) => [formatCurrency(value as number), name]} />
+              <Bar dataKey="Total Vendido" stackId="a" fill="#1e40af" />
+              <Bar dataKey="Comissão Total" stackId="a" fill="#10b981" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Formulário para Adicionar Nova Venda */}
+        <div className="bg-white p-6 rounded-2xl shadow-lg mb-8">
+          <h2 className="text-2xl font-bold text-gray-700 mb-4">Adicionar Nova Venda</h2>
+          <form onSubmit={adicionarNovaVenda} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <input
+              type="text"
+              placeholder="Nome do Cliente"
+              value={novaVenda.nomeCliente}
+              onChange={(e) => setNovaVenda({ ...novaVenda, nomeCliente: e.target.value })}
+              className="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+            />
+            <input
+              type="date"
+              placeholder="Data da Festa"
+              value={novaVenda.dataFesta}
+              onChange={(e) => setNovaVenda({ ...novaVenda, dataFesta: e.target.value })}
+              className="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+            />
+            <input
+              type="date"
+              placeholder="Data do Fechamento"
+              value={novaVenda.dataFechamento}
+              onChange={(e) => setNovaVenda({ ...novaVenda, dataFechamento: e.target.value })}
+              className="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              required
+            />
+            <input
+              type="text"
+              placeholder="Nº Convidados"
+              value={novaVenda.numConvidados}
+              onChange={(e) => setNovaVenda({ ...novaVenda, numConvidados: e.target.value })}
+              className="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <input
+              type="text"
+              placeholder="Forma de Pagamento"
+              value={novaVenda.formaPagamento}
+              onChange={(e) => setNovaVenda({ ...novaVenda, formaPagamento: e.target.value })}
+              className="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <div className="relative">
+              <input
+                type="number"
+                placeholder="Valor da Festa"
+                value={novaVenda.valorFesta}
+                onChange={(e) => setNovaVenda({ ...novaVenda, valorFesta: e.target.value })}
+                className="p-3 border border-gray-300 rounded-lg w-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+                step="0.01"
+                required
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">
+                Comissão: {formatCurrency(parseFloat(novaVenda.valorFesta) * 0.02 || 0)}
+              </span>
+            </div>
+            <div className="md:col-span-2">
+              <button
+                type="submit"
+                className="w-full bg-blue-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg hover:bg-blue-700 transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                Adicionar Venda
+              </button>
+            </div>
+          </form>
+        </div>
+        
+        {/* Seção da Agenda de Visitas */}
+        <div className="bg-white p-6 rounded-2xl shadow-lg mb-8">
+            <h2 className="text-2xl font-bold text-gray-700 mb-4">Agenda de Visitas</h2>
+            <form onSubmit={adicionarVisita} className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <input
+                    type="text"
+                    placeholder="Nome do Cliente"
+                    value={novaVisita.nomeCliente}
+                    onChange={(e) => setNovaVisita({ ...novaVisita, nomeCliente: e.target.value })}
+                    className="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    required
+                />
+                <input
+                    type="date"
+                    placeholder="Data da Visita"
+                    value={novaVisita.dataVisita}
+                    onChange={(e) => setNovaVisita({ ...novaVisita, dataVisita: e.target.value })}
+                    className="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    required
+                />
+                <input
+                    type="time"
+                    placeholder="Hora da Visita"
+                    value={novaVisita.horaVisita}
+                    onChange={(e) => setNovaVisita({ ...novaVisita, horaVisita: e.target.value })}
+                    className="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    required
+                />
+                <div className="md:col-span-3">
+                    <button
+                        type="submit"
+                        className="w-full bg-purple-600 text-white font-bold py-3 px-6 rounded-lg shadow-lg hover:bg-purple-700 transition duration-300 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    >
+                        Agendar Visita
+                    </button>
+                </div>
+            </form>
+            <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-100">
+                        <tr>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cliente</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Hora</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                        {visitasAgendadas.length > 0 ? (
+                            visitasAgendadas.map((visita) => (
+                                <tr key={visita.id}>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{visita.nomeCliente}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                        {format(parseISO(visita.dataVisita), 'dd/MM/yyyy', { locale: ptBR })}
+                                    </td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{visita.horaVisita}</td>
+                                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                        <button
+                                            onClick={() => setVisitaSendoEditada(visita)}
+                                            className="text-indigo-600 hover:text-indigo-900 mr-4"
+                                        >
+                                            Editar
+                                        </button>
+                                        <button
+                                            onClick={() => setConfirmacaoExclusao(visita.id)}
+                                            className="text-red-600 hover:text-red-900"
+                                        >
+                                            Remover
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))
+                        ) : (
+                            <tr>
+                                <td colSpan={4} className="px-6 py-4 text-center text-gray-500">Nenhuma visita agendada.</td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        {/* Modal de Edição */}
+        {visitaSendoEditada && (
+            <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center">
+                <div className="relative bg-white p-8 rounded-xl shadow-xl w-full max-w-md mx-auto">
+                    <h3 className="text-xl font-bold text-gray-800 mb-4">Editar Visita</h3>
+                    <form onSubmit={handleEditarVisita} className="space-y-4">
+                        <input
+                            type="text"
+                            placeholder="Nome do Cliente"
+                            value={visitaSendoEditada.nomeCliente}
+                            onChange={(e) => setVisitaSendoEditada({ ...visitaSendoEditada, nomeCliente: e.target.value })}
+                            className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            required
+                        />
+                        <input
+                            type="date"
+                            placeholder="Data da Visita"
+                            value={visitaSendoEditada.dataVisita}
+                            onChange={(e) => setVisitaSendoEditada({ ...visitaSendoEditada, dataVisita: e.target.value })}
+                            className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            required
+                        />
+                        <input
+                            type="time"
+                            placeholder="Hora da Visita"
+                            value={visitaSendoEditada.horaVisita}
+                            onChange={(e) => setVisitaSendoEditada({ ...visitaSendoEditada, horaVisita: e.target.value })}
+                            className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            required
+                        />
+                        <div className="flex justify-end space-x-2 mt-4">
+                            <button
+                                type="button"
+                                onClick={() => setVisitaSendoEditada(null)}
+                                className="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition duration-200"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                type="submit"
+                                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition duration-200"
+                            >
+                                Salvar
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        )}
+
+        {/* Modal de Confirmação de Exclusão */}
+        {confirmacaoExclusao && (
+            <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center">
+                <div className="relative bg-white p-8 rounded-xl shadow-xl w-full max-w-sm mx-auto">
+                    <h3 className="text-xl font-bold text-gray-800 mb-2">Confirmar Exclusão</h3>
+                    <p className="text-gray-600 mb-4">Você tem certeza que deseja remover esta visita? Esta ação não pode ser desfeita.</p>
+                    <div className="flex justify-end space-x-2">
+                        <button
+                            onClick={() => setConfirmacaoExclusao(null)}
+                            className="px-4 py-2 text-gray-700 bg-gray-200 rounded-lg hover:bg-gray-300 transition duration-200"
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            onClick={handleRemoverVisita}
+                            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition duration-200"
+                        >
+                            Remover
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* Navegação entre Meses */}
+        <div className="bg-white p-4 rounded-2xl shadow-lg mb-8">
+            <h2 className="text-2xl font-bold text-gray-700 mb-4">Histórico de Vendas por Mês</h2>
+            <div className="flex flex-wrap gap-2 mb-4">
+                {meses.map(mes => (
+                    <button
+                        key={mes}
+                        onClick={() => setMesSelecionado(mes)}
+                        className={`py-2 px-4 rounded-full font-semibold transition-colors duration-300 ease-in-out ${
+                            mes === mesSelecionado
+                                ? 'bg-blue-600 text-white shadow-md'
+                                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                        }`}
+                    >
+                        {mes}
+                    </button>
+                ))}
+            </div>
+            {/* Resumo e Tabela do Mês Selecionado */}
+            <div className="p-4 rounded-2xl bg-gray-50 border border-gray-200">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                    <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                        <h3 className="text-lg font-semibold text-gray-600">Total Vendido em {mesSelecionado}</h3>
+                        <p className="mt-1 text-2xl font-bold text-blue-600">
+                            {formatCurrency(resumoMensal[mesSelecionado]?.totalVendido || 0)}
+                        </p>
+                    </div>
+                    <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                        <h3 className="text-lg font-semibold text-gray-600">Comissão em {mesSelecionado}</h3>
+                        <p className="mt-1 text-2xl font-bold text-green-600">
+                            {formatCurrency(resumoMensal[mesSelecionado]?.comissaoTotal || 0)}
+                        </p>
+                    </div>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-gray-100">
+                            <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Cliente</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data Festa</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Data Fechamento</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Convidados</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Valor da Festa</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Comissão</th>
+                            </tr>
+                        </thead>
+                        <tbody className="bg-white divide-y divide-gray-200">
+                            {vendasDoMes.length > 0 ? (
+                                vendasDoMes.map((venda) => (
+                                    <tr key={venda.id}>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{venda.nomeCliente}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{venda.dataFesta}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{venda.dataFechamento}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{venda.numConvidados}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatCurrency(venda.valorFesta)}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-green-600">{formatCurrency(venda.comissao)}</td>
+                                    </tr>
+                                ))
+                            ) : (
+                                <tr>
+                                    <td colSpan={6} className="px-6 py-4 text-center text-gray-500">Nenhuma venda encontrada para este mês.</td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+      </div>
+    </div>
+  );
+}
