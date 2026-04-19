@@ -1,0 +1,53 @@
+{
+  "documents": [
+    {
+      "id": "mo5ssbd4rckr8vc1",
+      "originalName": "home_fest_financeiro_ultra_v3.xlsx",
+      "storedName": "mo5ssbd4rckr8vc1-home_fest_financeiro_ultra_v3.xlsx",
+      "ext": ".xlsx",
+      "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "size": 121512,
+      "relativePath": "storage/documents/2026/04/mo5ssbd4rckr8vc1-home_fest_financeiro_ultra_v3.xlsx",
+      "createdAt": "2026-04-19T13:24:27.400Z",
+      "updatedAt": "2026-04-19T13:24:32.495Z",
+      "status": "pendente_confirmacao",
+      "processingStage": "analise_concluida",
+      "documentType": "comprovante_compra",
+      "confidence": 0.68,
+      "extracted": {
+        "local": "Home_fest_financeiro_ultra_v3",
+        "data": null,
+        "itens": [],
+        "valoresIndividuais": [],
+        "valorTotal": null
+      },
+      "suggested": {
+        "categoriaDestino": "custo_evento",
+        "anexarAoRegistro": true
+      },
+      "confirmed": null,
+      "pendencias": [
+        "Conferir data da compra",
+        "Validar valor total",
+        "Relacionar ao evento correto"
+      ],
+      "timeline": [
+        {
+          "step": "recebido",
+          "at": "2026-04-19T13:24:27.400Z",
+          "label": "Documento recebido"
+        },
+        {
+          "step": "armazenado",
+          "at": "2026-04-19T13:24:27.400Z",
+          "label": "Anexo protegido"
+        },
+        {
+          "step": "analise",
+          "at": "2026-04-19T13:24:32.495Z",
+          "label": "Leitura inicial concluída"
+        }
+      ]
+    }
+  ]
+}
