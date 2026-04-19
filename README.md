@@ -80,3 +80,19 @@ git push -u origin main
 
 Este pacote já inclui o frontend operacional de inconsistências, com filtros, detalhe e ações de status.
 Se a tabela `public.inconsistencias` ainda não tiver as colunas `observacao`, `responsavel` e `resolvida_em`, o frontend continua funcionando com fallback de atualização apenas do `status`.
+
+
+## Evolução atual do módulo de inconsistências
+- histórico operacional por inconsistência
+- comentários operacionais
+- justificativa obrigatória ao ignorar
+- alertas clicáveis no dashboard
+- fallback seguro quando tabelas auxiliares ainda não existirem
+
+## SQL opcional desta etapa
+Rode também:
+- `supabase/etapa01d_inconsistencias_historico_comentarios.sql`
+
+Esse arquivo cria ou reforça colunas auxiliares na tabela `inconsistencias` e garante as tabelas:
+- `inconsistencias_historico`
+- `inconsistencias_comentarios`

@@ -28,6 +28,11 @@ const state = {
   },
   selectedInconsistencyId: null,
   inconsistencyActionMessage: '',
+  inconsistencyHistory: [],
+  inconsistencyComments: [],
+  loadingInconsistencyDetail: false,
+  selectedDashboardSeverity: '',
+  newInconsistencyComment: '',
 };
 
 function money(v) { return BRL.format(Number(v || 0)); }
@@ -105,6 +110,64 @@ function formatDateTime(value) {
   return date.toLocaleString('pt-BR');
 }
 
+function normalizeHistoryRow(row) {
+  return {
+    id: row.id,
+    inconsistencia_id: row.inconsistencia_id,
+    acao: row.acao || row.tipo_acao || 'atualizacao',
+    status_anterior: row.status_anterior || '',
+    status_novo: row.status_novo || '',
+    observacao: row.observacao || row.descricao || '',
+    responsavel: row.responsavel || 'Operação Home Fest',
+    criado_em: row.criado_em || row.created_at || null,
+  };
+}
+
+function normalizeCommentRow(row) {
+  return {
+    id: row.id,
+    inconsistencia_id: row.inconsistencia_id,
+    comentario: row.comentario || row.texto || '',
+    responsavel: row.responsavel || 'Operação Home Fest',
+    criado_em: row.criado_em || row.created_at || null,
+  };
+}
+
+function currentInconsistency() {
+  return state.inconsistencies.find((entry) => String(entry.id) === String(state.selectedInconsistencyId)) || null;
+}
+
+function historyLabel(item) {
+  const parts = [];
+  if (item.status_anterior) parts.push(item.status_anterior.replaceAll('_', ' '));
+  if (item.status_novo) parts.push(item.status_novo.replaceAll('_', ' '));
+  if (parts.length === 2) return `${parts[0]} → ${parts[1]}`;
+  if (parts.length === 1) return parts[0];
+  return item.acao.replaceAll('_', ' ');
+}
+
+function appendLocalHistory(inconsistenciaId, payload) {
+  const entry = normalizeHistoryRow({
+    id: `local-h-${Date.now()}`,
+    inconsistencia_id: inconsistenciaId,
+    ...payload,
+    criado_em: new Date().toISOString(),
+  });
+  state.inconsistencyHistory = [entry, ...state.inconsistencyHistory].sort((a, b) => new Date(b.criado_em || 0) - new Date(a.criado_em || 0));
+}
+
+function appendLocalComment(inconsistenciaId, comentario) {
+  const entry = normalizeCommentRow({
+    id: `local-c-${Date.now()}`,
+    inconsistencia_id: inconsistenciaId,
+    comentario,
+    responsavel: 'Operação Home Fest',
+    criado_em: new Date().toISOString(),
+  });
+  state.inconsistencyComments = [entry, ...state.inconsistencyComments].sort((a, b) => new Date(b.criado_em || 0) - new Date(a.criado_em || 0));
+}
+
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -154,9 +217,13 @@ function getInconsistencyMetrics() {
     if (item.status === 'em_analise') acc.emAnalise += 1;
     if (item.status === 'resolvida') acc.resolvidas += 1;
     if (item.status === 'ignorada') acc.ignoradas += 1;
+    if (item.severidade === 'critica') acc.criticas += 1;
+    if (item.severidade === 'alta') acc.altas += 1;
+    if (item.severidade === 'media') acc.medias += 1;
+    if (item.severidade === 'baixa') acc.baixas += 1;
     if (item.severidade === 'critica' || item.severidade === 'alta') acc.prioridadeAlta += 1;
     return acc;
-  }, { total: 0, abertas: 0, emAnalise: 0, resolvidas: 0, ignoradas: 0, prioridadeAlta: 0 });
+  }, { total: 0, abertas: 0, emAnalise: 0, resolvidas: 0, ignoradas: 0, prioridadeAlta: 0, criticas: 0, altas: 0, medias: 0, baixas: 0 });
 }
 
 function confidenceTone(value) {
@@ -430,6 +497,14 @@ function renderDashboard() {
       </article>
     </section>
 
+
+    <section class="dashboard-alert-grid">
+      <button class="alert-chip critical" data-dashboard-filter-severity="critica">Críticas <strong>${state.inconsistencies.filter((item) => item.severidade === 'critica' && item.status !== 'resolvida').length}</strong></button>
+      <button class="alert-chip high" data-dashboard-filter-severity="alta">Altas <strong>${state.inconsistencies.filter((item) => item.severidade === 'alta' && item.status !== 'resolvida').length}</strong></button>
+      <button class="alert-chip medium" data-dashboard-filter-severity="media">Médias <strong>${state.inconsistencies.filter((item) => item.severidade === 'media' && item.status !== 'resolvida').length}</strong></button>
+      <button class="alert-chip neutral" data-dashboard-go-inconsistencies>Ver central completa</button>
+    </section>
+
     <section class="panel-grid">
       <article class="panel">
         <div class="panel-title">Alertas de consistência</div>
@@ -638,6 +713,7 @@ function renderInconsistencies() {
         <span>Criada em ${formatDateTime(item.criada_em)}</span>
         ${item.resolvida_em ? `<span>Resolvida em ${formatDateTime(item.resolvida_em)}</span>` : ''}
         ${item.responsavel ? `<span>Responsável: ${escapeHtml(item.responsavel)}</span>` : ''}
+        <span>Comentários: ${state.inconsistencyComments.filter((entry) => String(entry.inconsistencia_id) === String(item.id)).length}</span>
       </div>
       ${item.observacao ? `<div class="inconsistency-note">${escapeHtml(item.observacao)}</div>` : ''}
       <div class="document-actions">
@@ -708,6 +784,7 @@ function renderInconsistencies() {
         </label>
       </div>
       <div class="upload-state">${state.inconsistencyActionMessage || 'Acompanhe e trate cada ocorrência sem apagar histórico.'}</div>
+      ${state.selectedDashboardSeverity ? `<div class="active-filter-banner">Filtro rápido do dashboard ativo: <strong>${escapeHtml(state.selectedDashboardSeverity)}</strong> <button class="mini-btn" id="clear-dashboard-severity">Limpar</button></div>` : ''}
     </section>
 
     <section class="inconsistency-list">
@@ -718,11 +795,37 @@ function renderInconsistencies() {
 
 function renderInconsistencyModal() {
   if (!state.selectedInconsistencyId) return '';
-  const item = state.inconsistencies.find((entry) => String(entry.id) === String(state.selectedInconsistencyId));
+  const item = currentInconsistency();
   if (!item) return '';
+
+  const historyHtml = state.inconsistencyHistory.length
+    ? state.inconsistencyHistory.map((entry) => `
+        <div class="timeline-item">
+          <div class="timeline-head">
+            <strong>${escapeHtml(historyLabel(entry))}</strong>
+            <span>${formatDateTime(entry.criado_em)}</span>
+          </div>
+          <div class="timeline-meta">${escapeHtml(entry.responsavel || 'Operação Home Fest')} • ${escapeHtml(entry.acao.replaceAll('_', ' '))}</div>
+          ${entry.observacao ? `<div class="timeline-note">${escapeHtml(entry.observacao)}</div>` : ''}
+        </div>
+      `).join('')
+    : '<div class="empty-state compact">Nenhum histórico detalhado encontrado para esta inconsistência.</div>';
+
+  const commentsHtml = state.inconsistencyComments.length
+    ? state.inconsistencyComments.map((entry) => `
+        <div class="comment-item">
+          <div class="timeline-head">
+            <strong>${escapeHtml(entry.responsavel || 'Operação Home Fest')}</strong>
+            <span>${formatDateTime(entry.criado_em)}</span>
+          </div>
+          <div class="timeline-note">${escapeHtml(entry.comentario)}</div>
+        </div>
+      `).join('')
+    : '<div class="empty-state compact">Nenhum comentário operacional registrado ainda.</div>';
+
   return `
     <div class="modal-backdrop" id="inconsistency-backdrop">
-      <div class="modal-card">
+      <div class="modal-card modal-card-wide">
         <div class="modal-head">
           <div>
             <div class="eyebrow">Detalhe da inconsistência</div>
@@ -757,9 +860,33 @@ function renderInconsistencyModal() {
               <strong>${formatDateTime(item.resolvida_em)}</strong>
             </div>
           </div>
-          <div class="detail-box full">
-            <span class="muted-label">Descrição / observação</span>
-            <pre>${escapeHtml(item.descricao || item.observacao || 'Sem descrição complementar registrada.')}</pre>
+          <div class="detail-grid detail-grid-2cols">
+            <div class="detail-box full-mobile">
+              <span class="muted-label">Descrição / observação</span>
+              <pre>${escapeHtml(item.descricao || item.observacao || 'Sem descrição complementar registrada.')}</pre>
+            </div>
+            <div class="detail-box full-mobile">
+              <span class="muted-label">Ações rápidas</span>
+              <div class="document-actions top-gap">
+                <button class="action-btn" data-mark-inconsistency-analysis="${item.id}" ${item.status === 'em_analise' ? 'disabled' : ''}>Em análise</button>
+                <button class="action-btn gold" data-resolve-inconsistency="${item.id}" ${item.status === 'resolvida' ? 'disabled' : ''}>Resolver</button>
+                <button class="action-btn ghost" data-ignore-inconsistency="${item.id}" ${item.status === 'ignorada' ? 'disabled' : ''}>Ignorar</button>
+              </div>
+            </div>
+            <div class="detail-box full-mobile">
+              <span class="muted-label">Histórico operacional</span>
+              <div class="timeline-list ${state.loadingInconsistencyDetail ? 'loading-block' : ''}">${historyHtml}</div>
+            </div>
+            <div class="detail-box full-mobile">
+              <span class="muted-label">Comentários</span>
+              <div class="comment-form">
+                <textarea id="inconsistency-comment-text" placeholder="Registrar comentário operacional, decisão tomada ou contexto da equipe...">${escapeHtml(state.newInconsistencyComment)}</textarea>
+                <div class="document-actions">
+                  <button class="action-btn gold" id="save-inconsistency-comment" data-inconsistency-comment-id="${item.id}">Salvar comentário</button>
+                </div>
+              </div>
+              <div class="timeline-list ${state.loadingInconsistencyDetail ? 'loading-block' : ''}">${commentsHtml}</div>
+            </div>
           </div>
           <div class="detail-box full">
             <span class="muted-label">Payload operacional</span>
@@ -863,6 +990,24 @@ function renderApp() {
 }
 
 function bindGlobalActions() {
+  document.querySelectorAll('[data-dashboard-filter-severity]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.view = 'inconsistencies';
+      state.selectedDashboardSeverity = button.dataset.dashboardFilterSeverity;
+      state.inconsistencyFilters.severidade = button.dataset.dashboardFilterSeverity;
+      renderApp();
+      if (canUseSupabase()) loadInconsistencies();
+    });
+  });
+
+  document.querySelectorAll('[data-dashboard-go-inconsistencies]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.view = 'inconsistencies';
+      renderApp();
+      if (canUseSupabase()) loadInconsistencies();
+    });
+  });
+
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.addEventListener('click', () => {
       state.view = button.dataset.view;
@@ -980,6 +1125,12 @@ function bindGlobalActions() {
     renderApp();
   });
 
+  document.querySelector('#clear-dashboard-severity')?.addEventListener('click', () => {
+    state.selectedDashboardSeverity = '';
+    state.inconsistencyFilters.severidade = 'todas';
+    renderApp();
+  });
+
   document.querySelector('#inconsistency-search')?.addEventListener('input', (event) => {
     state.inconsistencyFilters.busca = event.target.value;
     renderApp();
@@ -988,18 +1139,26 @@ function bindGlobalActions() {
   document.querySelectorAll('[data-open-inconsistency]').forEach((button) => {
     button.addEventListener('click', () => {
       state.selectedInconsistencyId = button.dataset.openInconsistency;
+      state.newInconsistencyComment = '';
       renderApp();
+      loadInconsistencyDetail(button.dataset.openInconsistency);
     });
   });
 
   document.querySelector('#close-inconsistency-btn')?.addEventListener('click', () => {
     state.selectedInconsistencyId = null;
+    state.inconsistencyHistory = [];
+    state.inconsistencyComments = [];
+    state.newInconsistencyComment = '';
     renderApp();
   });
 
   document.querySelector('#inconsistency-backdrop')?.addEventListener('click', (event) => {
     if (event.target.id === 'inconsistency-backdrop') {
       state.selectedInconsistencyId = null;
+      state.inconsistencyHistory = [];
+      state.inconsistencyComments = [];
+      state.newInconsistencyComment = '';
       renderApp();
     }
   });
@@ -1019,9 +1178,20 @@ function bindGlobalActions() {
   document.querySelectorAll('[data-ignore-inconsistency]').forEach((button) => {
     button.addEventListener('click', async () => {
       const reason = window.prompt('Informe a justificativa para ignorar esta inconsistência:');
-      if (!reason) return;
-      await updateInconsistency(button.dataset.ignoreInconsistency, 'ignorada', reason);
+      if (!reason || !reason.trim()) {
+        window.alert('A justificativa é obrigatória para ignorar uma inconsistência.');
+        return;
+      }
+      await updateInconsistency(button.dataset.ignoreInconsistency, 'ignorada', reason.trim());
     });
+  });
+
+  document.querySelector('#inconsistency-comment-text')?.addEventListener('input', (event) => {
+    state.newInconsistencyComment = event.target.value;
+  });
+
+  document.querySelector('#save-inconsistency-comment')?.addEventListener('click', async (event) => {
+    await saveInconsistencyComment(event.target.dataset.inconsistencyCommentId);
   });
 
   const dropzone = document.querySelector('#dropzone');
@@ -1197,6 +1367,77 @@ async function updateDocument(id, patch) {
 
 
 
+
+async function loadInconsistencyDetail(id) {
+  if (!canUseSupabase() || !id) return;
+  const supabase = getSupabase();
+  state.loadingInconsistencyDetail = true;
+  renderApp();
+
+  const historyQuery = await supabase
+    .from('inconsistencias_historico')
+    .select('*')
+    .eq('inconsistencia_id', id)
+    .order('criado_em', { ascending: false });
+
+  const commentsQuery = await supabase
+    .from('inconsistencias_comentarios')
+    .select('*')
+    .eq('inconsistencia_id', id)
+    .order('criado_em', { ascending: false });
+
+  state.inconsistencyHistory = historyQuery.error ? [] : (historyQuery.data || []).map(normalizeHistoryRow);
+  state.inconsistencyComments = commentsQuery.error ? [] : (commentsQuery.data || []).map(normalizeCommentRow);
+  state.loadingInconsistencyDetail = false;
+  renderApp();
+}
+
+async function saveHistoryRecord(inconsistenciaId, payload) {
+  if (!canUseSupabase()) return;
+  const supabase = getSupabase();
+  const result = await supabase.from('inconsistencias_historico').insert({
+    inconsistencia_id: inconsistenciaId,
+    ...payload,
+    responsavel: payload.responsavel || 'Operação Home Fest',
+  });
+
+  if (result.error) {
+    appendLocalHistory(inconsistenciaId, payload);
+    return;
+  }
+
+  if (String(state.selectedInconsistencyId) === String(inconsistenciaId)) {
+    await loadInconsistencyDetail(inconsistenciaId);
+  }
+}
+
+async function saveInconsistencyComment(id) {
+  const comment = state.newInconsistencyComment.trim();
+  if (!comment) {
+    window.alert('Digite um comentário antes de salvar.');
+    return;
+  }
+  if (!canUseSupabase()) return;
+  const supabase = getSupabase();
+  const payload = {
+    inconsistencia_id: id,
+    comentario: comment,
+    responsavel: 'Operação Home Fest',
+  };
+
+  const result = await supabase.from('inconsistencias_comentarios').insert(payload);
+  if (result.error) {
+    appendLocalComment(id, comment);
+    state.inconsistencyActionMessage = 'Comentário salvo localmente. Rode o SQL opcional para persistir no banco.';
+  } else {
+    state.inconsistencyActionMessage = 'Comentário operacional salvo com sucesso.';
+  }
+
+  state.newInconsistencyComment = '';
+  renderApp();
+  if (String(state.selectedInconsistencyId) === String(id)) await loadInconsistencyDetail(id);
+}
+
 async function loadInconsistencies() {
   if (!canUseSupabase()) return;
   const supabase = getSupabase();
@@ -1224,6 +1465,7 @@ async function updateInconsistency(id, nextStatus, observation = '') {
   if (!canUseSupabase()) return;
   const supabase = getSupabase();
   const now = new Date().toISOString();
+  const current = state.inconsistencies.find((item) => String(item.id) === String(id));
 
   const richPatch = {
     status: nextStatus,
@@ -1258,9 +1500,18 @@ async function updateInconsistency(id, nextStatus, observation = '') {
     });
   });
 
+  await saveHistoryRecord(id, {
+    acao: nextStatus === 'ignorada' ? 'ignorada' : nextStatus === 'resolvida' ? 'resolvida' : 'em_analise',
+    status_anterior: current?.status || '',
+    status_novo: nextStatus,
+    observacao: observation,
+    responsavel: 'Operação Home Fest',
+  });
+
   state.inconsistencyActionMessage = `Inconsistência atualizada para ${nextStatus.replaceAll('_', ' ')}.`;
   renderApp();
   await loadInconsistencies();
+  if (String(state.selectedInconsistencyId) === String(id)) await loadInconsistencyDetail(id);
 }
 
 async function boot() {
