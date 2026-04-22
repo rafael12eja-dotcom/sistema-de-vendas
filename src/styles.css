@@ -265,3 +265,6 @@ tbody tr:hover{background:rgba(255,255,255,.02)}
 .alert-chip.low{border-color:rgba(255,255,255,.12);background:rgba(255,255,255,.05)}
 .alert-chip span{color:var(--muted)}
 @media (max-width: 1080px){.quick-actions-grid{grid-template-columns:1fr}.priority-banner{flex-direction:column;align-items:flex-start}.priority-banner h2{font-size:24px}}
+
+#governance-note-text{min-height:120px;resize:vertical;background:#0b1220;border:1px solid var(--line);color:var(--text);border-radius:16px;padding:14px;width:100%}
+.governance-highlight{margin-bottom:20px}

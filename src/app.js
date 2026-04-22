@@ -33,6 +33,19 @@ const state = {
   loadingInconsistencyDetail: false,
   selectedDashboardSeverity: '',
   newInconsistencyComment: '',
+  governance: {
+    periodo: '',
+    status: 'aberto',
+    bloqueado_por_inconsistencias: false,
+    bloqueios_total: 0,
+    responsavel: '',
+    observacao: '',
+    fechado_em: null,
+    atualizado_em: null,
+  },
+  loadingGovernance: false,
+  governanceMessage: '',
+  governanceNoteDraft: '',
 };
 
 function money(v) { return BRL.format(Number(v || 0)); }
@@ -109,6 +122,56 @@ function formatDateTime(value) {
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleString('pt-BR');
 }
+
+function currentPeriodKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function formatPeriodLabel(period) {
+  if (!period || !/^\d{4}-\d{2}$/.test(period)) return period || '-';
+  const [year, month] = period.split('-');
+  const date = new Date(Number(year), Number(month) - 1, 1);
+  return date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+}
+
+function normalizeGovernanceRow(row = {}) {
+  return {
+    periodo: row.periodo || currentPeriodKey(),
+    status: row.status || 'aberto',
+    bloqueado_por_inconsistencias: Boolean(row.bloqueado_por_inconsistencias),
+    bloqueios_total: Number(row.bloqueios_total || 0),
+    responsavel: row.responsavel || 'Operação Home Fest',
+    observacao: row.observacao || '',
+    fechado_em: row.fechado_em || null,
+    criado_em: row.criado_em || null,
+    atualizado_em: row.atualizado_em || row.updated_at || null,
+  };
+}
+
+function getGovernanceMetrics() {
+  const unresolved = unresolvedInconsistencies();
+  const critical = unresolved.filter((item) => item.severidade === 'critica').length;
+  const high = unresolved.filter((item) => item.severidade === 'alta').length;
+  const medium = unresolved.filter((item) => item.severidade === 'media').length;
+  return {
+    unresolved: unresolved.length,
+    critical,
+    high,
+    medium,
+    blockers: critical,
+    canClose: critical === 0,
+  };
+}
+
+function getGovernanceTone() {
+  const metrics = getGovernanceMetrics();
+  if (metrics.critical) return 'critical';
+  if (metrics.high) return 'high';
+  if (metrics.medium) return 'medium';
+  return 'ok';
+}
+
 
 function normalizeHistoryRow(row) {
   return {
@@ -599,6 +662,28 @@ function renderDashboard() {
       </article>
     </section>
 
+    <section class="panel-grid governance-highlight">
+      <article class="panel compact-panel">
+        <div class="panel-title">Governança do período</div>
+        <div class="summary-list">
+          <div><span>Período</span><strong>${formatPeriodLabel(state.governance.periodo)}</strong></div>
+          <div><span>Status</span><strong>${state.governance.status.replaceAll('_', ' ')}</strong></div>
+          <div><span>Bloqueios críticos</span><strong class="${getGovernanceMetrics().blockers ? 'negative' : 'positive'}">${getGovernanceMetrics().blockers}</strong></div>
+        </div>
+        <div class="quick-actions-row top-gap">
+          <button class="mini-btn" data-view-governance>Governança</button>
+          <button class="mini-btn" data-dashboard-filter-severity="critica">Ver bloqueios</button>
+        </div>
+      </article>
+      <article class="panel compact-panel">
+        <div class="panel-title">Fechamento mensal</div>
+        <ul class="alert-list">
+          <li>${badge(getGovernanceMetrics().canClose ? 'Liberado' : 'Bloqueado', getGovernanceMetrics().canClose ? 'ok' : 'danger')} Fechamento depende de inconsistências críticas zeradas.</li>
+          <li>${badge(state.governance.fechado_em ? 'Último fechamento salvo' : 'Sem fechamento registrado', state.governance.fechado_em ? 'ok' : 'warn')} ${state.governance.fechado_em ? formatDateTime(state.governance.fechado_em) : 'Período ainda aberto.'}</li>
+        </ul>
+      </article>
+    </section>
+
     <section class="panel-grid">
       <article class="panel">
         <div class="panel-title">Alertas de consistência</div>
@@ -993,6 +1078,104 @@ function renderPreviewModal() {
   `;
 }
 
+function renderGovernance() {
+  const governance = state.governance;
+  const metrics = getGovernanceMetrics();
+  const tone = getGovernanceTone();
+  const blockerList = unresolvedInconsistencies().filter((item) => item.severidade === 'critica').slice(0, 8);
+
+  return `
+    <section class="page-head documents-head">
+      <div>
+        <div class="eyebrow">Governança operacional</div>
+        <h1>Fechamento mensal e travas de risco</h1>
+        <p>O sistema deixa de ser apenas visual e passa a proteger o fechamento quando há inconsistências críticas abertas.</p>
+      </div>
+      <div class="head-actions">
+        <button class="action-btn ghost" id="refresh-governance-btn">${state.loadingGovernance ? 'Atualizando...' : 'Atualizar'}</button>
+      </div>
+    </section>
+
+    ${renderConnectionWarning()}
+
+    <section class="priority-banner tone-${tone}">
+      <div>
+        <div class="eyebrow">Status do período</div>
+        <h2>${governance.bloqueado_por_inconsistencias ? 'Fechamento bloqueado' : governance.status === 'fechado' ? 'Período fechado' : governance.status === 'em_revisao' ? 'Período em revisão' : 'Período aberto'}</h2>
+        <p>${governance.bloqueado_por_inconsistencias ? `${metrics.blockers} inconsistência(s) crítica(s) aberta(s) impedem o fechamento normal.` : governance.status === 'fechado' ? 'Período encerrado com registro de governança salvo.' : 'Período disponível para operação, revisão e fechamento controlado.'}</p>
+      </div>
+      <div class="priority-banner-actions">
+        <div class="priority-summary">
+          <span>Período atual</span>
+          <strong>${formatPeriodLabel(governance.periodo)}</strong>
+        </div>
+        <div class="quick-actions-row">
+          <button class="mini-btn" id="governance-open-review-btn">Iniciar revisão</button>
+          <button class="mini-btn" id="governance-reopen-btn">Reabrir</button>
+          <button class="action-btn ${metrics.canClose ? 'gold' : 'ghost'}" id="governance-close-btn">Fechar período</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats-grid">
+      <article class="stat-card"><span>Status</span><strong>${governance.status.replaceAll('_', ' ')}</strong></article>
+      <article class="stat-card"><span>Bloqueios críticos</span><strong class="${metrics.blockers ? 'negative' : 'positive'}">${metrics.blockers}</strong></article>
+      <article class="stat-card"><span>Pendências abertas</span><strong>${metrics.unresolved}</strong></article>
+      <article class="stat-card"><span>Responsável</span><strong>${escapeHtml(governance.responsavel || 'Operação Home Fest')}</strong></article>
+      <article class="stat-card"><span>Atualizado em</span><strong>${formatDateTime(governance.atualizado_em)}</strong></article>
+      <article class="stat-card"><span>Fechado em</span><strong>${formatDateTime(governance.fechado_em)}</strong></article>
+    </section>
+
+    <section class="panel-grid">
+      <article class="panel">
+        <div class="panel-title">Resumo de bloqueio</div>
+        <ul class="alert-list">
+          <li>${badge(`${metrics.critical} crítica(s)`, metrics.critical ? 'danger' : 'ok')} Fecham a porta do período até resolução.</li>
+          <li>${badge(`${metrics.high} alta(s)`, metrics.high ? 'warn' : 'ok')} Exigem priorização antes de contaminar o fechamento.</li>
+          <li>${badge(`${metrics.medium} média(s)`, metrics.medium ? 'gold' : 'ok')} Seguem monitoradas na rotina operacional.</li>
+        </ul>
+        <div class="top-gap">
+          <button class="mini-btn" data-dashboard-filter-severity="critica">Abrir críticas</button>
+          <button class="mini-btn" data-dashboard-go-inconsistencies>Central de inconsistências</button>
+        </div>
+      </article>
+      <article class="panel">
+        <div class="panel-title">Observação do período</div>
+        <textarea id="governance-note-text" placeholder="Registrar decisão da revisão, contexto do fechamento ou motivo da reabertura...">${escapeHtml(state.governanceNoteDraft || governance.observacao || '')}</textarea>
+        <div class="document-actions top-gap">
+          <button class="action-btn gold" id="save-governance-note-btn">Salvar observação</button>
+        </div>
+        <div class="upload-state">${state.governanceMessage || 'Governança pronta para operar com trava por inconsistência crítica.'}</div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Bloqueios críticos em aberto</div>
+      <div class="documents-feed">
+        ${blockerList.length ? blockerList.map((item) => `
+          <article class="inconsistency-card severity-${item.severidade}">
+            <div class="inconsistency-top">
+              <div>
+                <div class="eyebrow">${escapeHtml(item.codigo_regra)}</div>
+                <h3>${escapeHtml(item.titulo)}</h3>
+                <p>${escapeHtml(item.modulo)} • ${escapeHtml(item.entidade_tipo)}</p>
+              </div>
+              <div class="document-badges">
+                ${badge(item.severidade, inconsistencySeverityTone(item.severidade))}
+                ${badge(item.status.replaceAll('_', ' '), inconsistencyStatusTone(item.status))}
+              </div>
+            </div>
+            <div class="document-actions">
+              <button class="action-btn ghost" data-open-inconsistency="${item.id}">Ver detalhe</button>
+              <button class="action-btn" data-mark-inconsistency-analysis="${item.id}">Em análise</button>
+            </div>
+          </article>
+        `).join('') : '<div class="empty-state">Nenhum bloqueio crítico aberto. O período pode avançar para fechamento quando a operação decidir.</div>'}
+      </div>
+    </section>
+  `;
+}
+
 function renderEvents() {
   const rows = appData.events.map(e => `
     <tr>
@@ -1046,6 +1229,7 @@ function renderApp() {
           ${navItem('events', 'Eventos')}
           ${navItem('documents', 'Documentos')}
           ${navItem('inconsistencies', `Inconsistências${unresolvedInconsistencies().length ? ` (${unresolvedInconsistencies().length})` : ''}`)}
+          ${navItem('governance', `Governança${getGovernanceMetrics().blockers ? ` (${getGovernanceMetrics().blockers})` : ''}`)}
         </nav>
       </aside>
       <main class="main-content">
@@ -1053,6 +1237,7 @@ function renderApp() {
         ${state.view === 'events' ? renderEvents() : ''}
         ${state.view === 'documents' ? renderDocuments() : ''}
         ${state.view === 'inconsistencies' ? renderInconsistencies() : ''}
+        ${state.view === 'governance' ? renderGovernance() : ''}
       </main>
     </div>
     ${renderPreviewModal()}
@@ -1101,6 +1286,9 @@ function bindGlobalActions() {
       }
       if (state.view === 'inconsistencies' && canUseSupabase()) {
         loadInconsistencies();
+      }
+      if (state.view === 'governance' && canUseSupabase()) {
+        loadGovernance();
       }
     });
   });
@@ -1192,6 +1380,38 @@ function bindGlobalActions() {
   document.querySelector('#refresh-inconsistencies-btn')?.addEventListener('click', async () => {
     await loadInconsistencies();
   });
+  document.querySelectorAll('[data-view-governance]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.view = 'governance';
+      renderApp();
+      if (canUseSupabase()) loadGovernance();
+    });
+  });
+
+  document.querySelector('#refresh-governance-btn')?.addEventListener('click', async () => {
+    await loadGovernance();
+  });
+
+  document.querySelector('#governance-note-text')?.addEventListener('input', (event) => {
+    state.governanceNoteDraft = event.target.value;
+  });
+
+  document.querySelector('#save-governance-note-btn')?.addEventListener('click', async () => {
+    await saveGovernanceNote();
+  });
+
+  document.querySelector('#governance-open-review-btn')?.addEventListener('click', async () => {
+    await updateGovernanceStatus('em_revisao');
+  });
+
+  document.querySelector('#governance-reopen-btn')?.addEventListener('click', async () => {
+    await updateGovernanceStatus('aberto');
+  });
+
+  document.querySelector('#governance-close-btn')?.addEventListener('click', async () => {
+    await closeGovernancePeriod();
+  });
+
 
   document.querySelector('#inconsistency-status-filter')?.addEventListener('change', (event) => {
     state.inconsistencyFilters.status = event.target.value;
@@ -1632,9 +1852,101 @@ async function updateInconsistency(id, nextStatus, observation = '') {
   if (String(state.selectedInconsistencyId) === String(id)) await loadInconsistencyDetail(id);
 }
 
+async function loadGovernance() {
+  if (!canUseSupabase()) return;
+  const supabase = getSupabase();
+  state.loadingGovernance = true;
+  renderApp();
+
+  const periodo = currentPeriodKey();
+  let query = await supabase
+    .from('fechamentos_mensais')
+    .select('*')
+    .eq('periodo', periodo)
+    .maybeSingle();
+
+  state.loadingGovernance = false;
+
+  if (query.error) {
+    state.governance = normalizeGovernanceRow({
+      periodo,
+      status: 'aberto',
+      bloqueado_por_inconsistencias: getGovernanceMetrics().blockers > 0,
+      bloqueios_total: getGovernanceMetrics().blockers,
+      observacao: state.governance.observacao || '',
+    });
+    state.governanceMessage = `Tabela de governança ainda não disponível no banco: ${query.error.message}`;
+    renderApp();
+    return;
+  }
+
+  state.governance = normalizeGovernanceRow(query.data || { periodo, status: 'aberto' });
+  state.governance.bloqueado_por_inconsistencias = getGovernanceMetrics().blockers > 0;
+  state.governance.bloqueios_total = getGovernanceMetrics().blockers;
+  state.governanceNoteDraft = state.governance.observacao || '';
+  state.governanceMessage = state.governance.bloqueado_por_inconsistencias ? 'Existem bloqueios críticos abertos para o período atual.' : 'Governança carregada com sucesso.';
+  renderApp();
+}
+
+async function persistGovernance(extraPatch = {}) {
+  if (!canUseSupabase()) return { ok: false, error: 'Sem conexão' };
+  const supabase = getSupabase();
+  const metrics = getGovernanceMetrics();
+  const payload = {
+    periodo: state.governance.periodo || currentPeriodKey(),
+    status: state.governance.status || 'aberto',
+    bloqueado_por_inconsistencias: metrics.blockers > 0,
+    bloqueios_total: metrics.blockers,
+    responsavel: 'Operação Home Fest',
+    observacao: state.governance.observacao || '',
+    ...extraPatch,
+  };
+
+  let result = await supabase.from('fechamentos_mensais').upsert(payload, { onConflict: 'periodo' }).select('*').single();
+  if (result.error) {
+    state.governance = normalizeGovernanceRow(payload);
+    state.governanceMessage = `Governança salva apenas localmente: ${result.error.message}`;
+    renderApp();
+    return { ok: false, error: result.error.message };
+  }
+
+  state.governance = normalizeGovernanceRow(result.data);
+  state.governanceNoteDraft = state.governance.observacao || '';
+  renderApp();
+  return { ok: true };
+}
+
+async function saveGovernanceNote() {
+  state.governance.observacao = (state.governanceNoteDraft || '').trim();
+  const result = await persistGovernance({ observacao: state.governance.observacao });
+  state.governanceMessage = result.ok ? 'Observação de governança salva com sucesso.' : state.governanceMessage;
+  renderApp();
+}
+
+async function updateGovernanceStatus(nextStatus) {
+  state.governance.status = nextStatus;
+  const result = await persistGovernance({ status: nextStatus, fechado_em: nextStatus === 'fechado' ? new Date().toISOString() : null });
+  state.governanceMessage = result.ok ? `Período atualizado para ${nextStatus.replaceAll('_', ' ')}.` : state.governanceMessage;
+  renderApp();
+}
+
+async function closeGovernancePeriod() {
+  const metrics = getGovernanceMetrics();
+  if (metrics.blockers > 0) {
+    state.governanceMessage = 'Não é possível fechar o período com inconsistências críticas abertas.';
+    state.view = 'governance';
+    renderApp();
+    return;
+  }
+  state.governance.status = 'fechado';
+  const result = await persistGovernance({ status: 'fechado', fechado_em: new Date().toISOString() });
+  state.governanceMessage = result.ok ? 'Período fechado com sucesso.' : state.governanceMessage;
+  renderApp();
+}
+
 async function boot() {
   if (canUseSupabase()) {
-    await Promise.all([loadDocuments(), loadEvents(), loadInconsistencies()]);
+    await Promise.all([loadDocuments(), loadEvents(), loadInconsistencies(), loadGovernance()]);
   }
   renderApp();
 }
