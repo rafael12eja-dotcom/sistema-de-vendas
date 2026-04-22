@@ -64,6 +64,15 @@ const state = {
     competencia: currentPeriodKey(),
     status: 'pendente',
   },
+  dreCosts: [],
+  dreFixedExpenses: [],
+  dreInvestments: [],
+  loadingDreData: false,
+  dreMessage: '',
+  dreFilters: {
+    competencia: '',
+    destaque: 'todos',
+  },
 };
 
 function money(v) { return BRL.format(Number(v || 0)); }
@@ -302,6 +311,187 @@ function buildReceivableFromEvent(evento) {
     evento_id: evento.id,
     observacao: 'Gerado automaticamente a partir do saldo a receber do evento.',
   };
+}
+
+function parseMesReferencia(value) {
+  if (!value) return '';
+  const clean = String(value).trim().toLowerCase();
+  const map = {
+    janeiro: '01', fevereiro: '02', marco: '03', março: '03', abril: '04', maio: '05', junho: '06',
+    julho: '07', agosto: '08', setembro: '09', outubro: '10', novembro: '11', dezembro: '12'
+  };
+  const match = clean.match(/([a-zçãé]+)\s+(\d{4})/i);
+  if (!match) return '';
+  const month = map[match[1]];
+  return month ? `${match[2]}-${month}` : '';
+}
+
+function normalizeClientName(value) {
+  return String(value || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function normalizeDreEventRow(row, index = 0) {
+  return {
+    id: row.id || `app-event-${index}`,
+    cliente: row.nome_cliente || row.cliente || 'Evento sem cliente',
+    data_evento: row.data_evento || row.dataEvento || row.mes || null,
+    competencia: (row.data_evento || row.dataEvento || row.mes || '').slice(0,7),
+    tipo: row.unidade || row.tipo || '-',
+    valor_vendido: Number(row.valor_vendido ?? row.valorVenda ?? 0),
+    valor_recebido: Number(row.valor_recebido ?? row.recebido ?? 0),
+    valor_a_receber: Number(row.valor_a_receber ?? row.aReceber ?? 0),
+  };
+}
+
+function normalizeDreCostRow(row) {
+  return {
+    evento_id: row.evento_id || null,
+    cliente: row.cliente || row.nome_cliente || '',
+    valor_real: Number(row.valor_real ?? row.custoReal ?? 0),
+    data_lancamento: row.data_lancamento || row.dataEvento || null,
+    origem: row.origem || '',
+  };
+}
+
+function normalizeDreFixedRow(row) {
+  return {
+    competencia: row.competencia || row.mes_referencia || parseMesReferencia(row.mesReferencia),
+    valor: Number(row.valor || row.valor_real || 0),
+    descricao: row.descricao || row.categoria || 'Despesa fixa',
+  };
+}
+
+function normalizeDreInvestmentRow(row) {
+  return {
+    competencia: row.competencia || row.data_compra?.slice?.(0,7) || row.data_lancamento?.slice?.(0,7) || row.data?.slice?.(0,7) || '',
+    valor: Number(row.valor || 0),
+    descricao: row.item || row.descricao || row.categoria || 'Investimento',
+    status: row.status || '',
+  };
+}
+
+function getDreEvents() {
+  const source = state.events.length ? state.events : appData.events;
+  return source.map(normalizeDreEventRow);
+}
+
+function getDreCosts() {
+  if (state.dreCosts.length) return state.dreCosts.map(normalizeDreCostRow);
+  return appData.costsReal.map(normalizeDreCostRow);
+}
+
+function getDreFixedExpenses() {
+  if (state.dreFixedExpenses.length) return state.dreFixedExpenses.map(normalizeDreFixedRow);
+  return appData.fixedExpenses.map(normalizeDreFixedRow);
+}
+
+function getDreInvestments() {
+  if (state.dreInvestments.length) return state.dreInvestments.map(normalizeDreInvestmentRow);
+  return appData.investments.map(normalizeDreInvestmentRow);
+}
+
+function buildCostLookups(events, costs) {
+  const byEventId = new Map();
+  const byClient = new Map();
+  costs.forEach((row) => {
+    if (row.evento_id) byEventId.set(String(row.evento_id), (byEventId.get(String(row.evento_id)) || 0) + Number(row.valor_real || 0));
+    const clientKey = normalizeClientName(row.cliente || row.origem);
+    if (clientKey) byClient.set(clientKey, (byClient.get(clientKey) || 0) + Number(row.valor_real || 0));
+  });
+  const usedClientKeys = new Set();
+  const totalFromEvents = events.reduce((sum, event) => {
+    if (byEventId.has(String(event.id))) return sum + (byEventId.get(String(event.id)) || 0);
+    const key = normalizeClientName(event.cliente);
+    if (key && byClient.has(key) && !usedClientKeys.has(key)) {
+      usedClientKeys.add(key);
+      return sum + (byClient.get(key) || 0);
+    }
+    return sum;
+  }, 0);
+  return { byEventId, byClient, totalFromEvents };
+}
+
+function getDreEventRows() {
+  const events = getDreEvents();
+  const costs = getDreCosts();
+  const lookups = buildCostLookups(events, costs);
+  const consumedClients = new Set();
+  return events
+    .map((event) => {
+      let custo = lookups.byEventId.get(String(event.id)) || 0;
+      if (!custo) {
+        const key = normalizeClientName(event.cliente);
+        if (key && lookups.byClient.has(key) && !consumedClients.has(key)) {
+          consumedClients.add(key);
+          custo = lookups.byClient.get(key) || 0;
+        }
+      }
+      const lucroBruto = event.valor_vendido - custo;
+      const margem = event.valor_vendido > 0 ? (lucroBruto / event.valor_vendido) * 100 : 0;
+      return { ...event, custo_evento: custo, lucro_bruto: lucroBruto, margem };
+    })
+    .sort((a, b) => String(a.data_evento || '').localeCompare(String(b.data_evento || '')));
+}
+
+function getDreMonthlyRows() {
+  const rows = new Map();
+  const touch = (competencia) => {
+    if (!competencia) return null;
+    if (!rows.has(competencia)) rows.set(competencia, { competencia, vendas: 0, custos: 0, despesasFixas: 0, investimentos: 0, resultadoReal: 0 });
+    return rows.get(competencia);
+  };
+
+  getDreEventRows().forEach((event) => {
+    const bucket = touch(event.competencia);
+    if (!bucket) return;
+    bucket.vendas += event.valor_vendido;
+    bucket.custos += event.custo_evento;
+  });
+
+  getDreFixedExpenses().forEach((item) => {
+    const bucket = touch(item.competencia);
+    if (!bucket) return;
+    bucket.despesasFixas += item.valor;
+  });
+
+  getDreInvestments().forEach((item) => {
+    const bucket = touch(item.competencia);
+    if (!bucket) return;
+    bucket.investimentos += item.valor;
+  });
+
+  return Array.from(rows.values())
+    .map((item) => ({ ...item, resultadoReal: item.vendas - item.custos - item.despesasFixas - item.investimentos }))
+    .sort((a, b) => String(a.competencia).localeCompare(String(b.competencia)));
+}
+
+function getDreExecutiveSummary() {
+  const monthlyRows = getDreMonthlyRows();
+  const eventRows = getDreEventRows();
+  const investments = getDreInvestments();
+  const semCompetenciaInvestimentos = investments.filter((item) => !item.competencia && item.valor > 0).reduce((sum, item) => sum + item.valor, 0);
+  const totals = monthlyRows.reduce((acc, item) => {
+    acc.vendas += item.vendas;
+    acc.custos += item.custos;
+    acc.despesasFixas += item.despesasFixas;
+    acc.investimentos += item.investimentos;
+    acc.resultadoReal += item.resultadoReal;
+    return acc;
+  }, { vendas: 0, custos: 0, despesasFixas: 0, investimentos: 0, resultadoReal: 0 });
+  const lucroBrutoTotal = eventRows.reduce((sum, item) => sum + item.lucro_bruto, 0);
+  const margemMedia = totals.vendas > 0 ? (totals.resultadoReal / totals.vendas) * 100 : 0;
+  return { ...totals, lucroBrutoTotal, margemMedia, semCompetenciaInvestimentos, eventos: eventRows.length, meses: monthlyRows.length };
+}
+
+function getFilteredDreMonthlyRows() {
+  const rows = getDreMonthlyRows();
+  const { competencia, destaque } = state.dreFilters;
+  return rows.filter((item) => {
+    if (competencia && item.competencia !== competencia) return false;
+    if (destaque === 'negativo' && item.resultadoReal >= 0) return false;
+    if (destaque === 'positivo' && item.resultadoReal < 0) return false;
+    return true;
+  });
 }
 
 
@@ -838,6 +1028,29 @@ function renderDashboard() {
       </article>
     </section>
 
+    <section class="panel-grid dre-highlight">
+      <article class="panel compact-panel">
+        <div class="panel-title">DRE gerencial</div>
+        <div class="summary-list">
+          <div><span>Resultado real</span><strong class="${getDreExecutiveSummary().resultadoReal >= 0 ? 'positive' : 'negative'}">${money(getDreExecutiveSummary().resultadoReal)}</strong></div>
+          <div><span>Lucro bruto</span><strong>${money(getDreExecutiveSummary().lucroBrutoTotal)}</strong></div>
+          <div><span>Margem real</span><strong>${getDreExecutiveSummary().margemMedia.toFixed(1)}%</strong></div>
+        </div>
+        <div class="quick-actions-row top-gap">
+          <button class="mini-btn" data-view-dre>Abrir DRE</button>
+          <button class="mini-btn" data-dre-set-negative>Meses negativos</button>
+        </div>
+      </article>
+      <article class="panel compact-panel">
+        <div class="panel-title">Leitura executiva</div>
+        <ul class="alert-list">
+          <li>${badge(`${getDreExecutiveSummary().meses} mês(es)`, 'ok')} Base mensal consolidada para leitura gerencial.</li>
+          <li>${badge(`${getDreExecutiveSummary().eventos} evento(s)`, 'ok')} Visão por evento com lucro bruto e margem.</li>
+          <li>${badge(getDreExecutiveSummary().semCompetenciaInvestimentos ? 'Ajustar competência' : 'Competências ok', getDreExecutiveSummary().semCompetenciaInvestimentos ? 'warn' : 'ok')} ${getDreExecutiveSummary().semCompetenciaInvestimentos ? 'Há investimentos sem competência mensal e eles ficam fora da leitura por mês.' : 'Investimentos com competência conseguem entrar na leitura mensal.'}</li>
+        </ul>
+      </article>
+    </section>
+
     <section class="panel-grid">
       <article class="panel">
         <div class="panel-title">Alertas de consistência</div>
@@ -1302,6 +1515,29 @@ function renderGovernance() {
       </article>
     </section>
 
+    <section class="panel-grid dre-highlight">
+      <article class="panel compact-panel">
+        <div class="panel-title">DRE gerencial</div>
+        <div class="summary-list">
+          <div><span>Resultado real</span><strong class="${getDreExecutiveSummary().resultadoReal >= 0 ? 'positive' : 'negative'}">${money(getDreExecutiveSummary().resultadoReal)}</strong></div>
+          <div><span>Lucro bruto</span><strong>${money(getDreExecutiveSummary().lucroBrutoTotal)}</strong></div>
+          <div><span>Margem real</span><strong>${getDreExecutiveSummary().margemMedia.toFixed(1)}%</strong></div>
+        </div>
+        <div class="quick-actions-row top-gap">
+          <button class="mini-btn" data-view-dre>Abrir DRE</button>
+          <button class="mini-btn" data-dre-set-negative>Meses negativos</button>
+        </div>
+      </article>
+      <article class="panel compact-panel">
+        <div class="panel-title">Leitura executiva</div>
+        <ul class="alert-list">
+          <li>${badge(`${getDreExecutiveSummary().meses} mês(es)`, 'ok')} Base mensal consolidada para leitura gerencial.</li>
+          <li>${badge(`${getDreExecutiveSummary().eventos} evento(s)`, 'ok')} Visão por evento com lucro bruto e margem.</li>
+          <li>${badge(getDreExecutiveSummary().semCompetenciaInvestimentos ? 'Ajustar competência' : 'Competências ok', getDreExecutiveSummary().semCompetenciaInvestimentos ? 'warn' : 'ok')} ${getDreExecutiveSummary().semCompetenciaInvestimentos ? 'Há investimentos sem competência mensal e eles ficam fora da leitura por mês.' : 'Investimentos com competência conseguem entrar na leitura mensal.'}</li>
+        </ul>
+      </article>
+    </section>
+
     <section class="panel-grid">
       <article class="panel">
         <div class="panel-title">Resumo de bloqueio</div>
@@ -1493,6 +1729,128 @@ function renderFinance() {
   `;
 }
 
+function renderDre() {
+  const summary = getDreExecutiveSummary();
+  const monthlyRows = getFilteredDreMonthlyRows();
+  const eventRows = getDreEventRows();
+  const filteredEvents = state.dreFilters.competencia ? eventRows.filter((item) => item.competencia === state.dreFilters.competencia) : eventRows;
+  const monthlyTable = monthlyRows.map((item) => `
+    <tr>
+      <td>${formatPeriodLabel(item.competencia)}</td>
+      <td>${money(item.vendas)}</td>
+      <td>${money(item.custos)}</td>
+      <td>${money(item.despesasFixas)}</td>
+      <td>${money(item.investimentos)}</td>
+      <td><strong class="${item.resultadoReal >= 0 ? 'positive' : 'negative'}">${money(item.resultadoReal)}</strong></td>
+    </tr>
+  `).join('');
+  const eventTable = filteredEvents.map((item) => `
+    <tr>
+      <td>${escapeHtml(item.cliente)}</td>
+      <td>${escapeHtml(item.tipo)}</td>
+      <td>${item.data_evento ? formatDateTime(`${item.data_evento}T12:00:00`) : '-'}</td>
+      <td>${money(item.valor_vendido)}</td>
+      <td>${money(item.custo_evento)}</td>
+      <td><strong class="${item.lucro_bruto >= 0 ? 'positive' : 'negative'}">${money(item.lucro_bruto)}</strong></td>
+      <td>${item.margem.toFixed(1)}%</td>
+      <td>${money(item.valor_recebido)}</td>
+      <td>${money(item.valor_a_receber)}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <section class="page-head documents-head">
+      <div>
+        <div class="eyebrow">DRE gerencial</div>
+        <h1>Resultado real por mês e por evento</h1>
+        <p>Leitura executiva da Home Fest com base na regra oficial: vendas - custos de evento - despesas fixas - investimentos.</p>
+      </div>
+      <div class="head-actions">
+        <button class="action-btn ghost" id="refresh-dre-btn">${state.loadingDreData ? 'Atualizando...' : 'Atualizar DRE'}</button>
+      </div>
+    </section>
+
+    ${renderConnectionWarning()}
+
+    <section class="stats-grid">
+      <article class="stat-card"><span>Vendas consolidadas</span><strong>${money(summary.vendas)}</strong></article>
+      <article class="stat-card"><span>Custos de evento</span><strong>${money(summary.custos)}</strong></article>
+      <article class="stat-card"><span>Despesas fixas</span><strong>${money(summary.despesasFixas)}</strong></article>
+      <article class="stat-card"><span>Investimentos com competência</span><strong>${money(summary.investimentos)}</strong></article>
+      <article class="stat-card"><span>Lucro bruto</span><strong class="${summary.lucroBrutoTotal >= 0 ? 'positive' : 'negative'}">${money(summary.lucroBrutoTotal)}</strong></article>
+      <article class="stat-card"><span>Resultado real</span><strong class="${summary.resultadoReal >= 0 ? 'positive' : 'negative'}">${money(summary.resultadoReal)}</strong></article>
+    </section>
+
+    <section class="panel-grid dre-grid">
+      <article class="panel compact-panel">
+        <div class="panel-title">Filtro gerencial</div>
+        <div class="filters-grid finance-form-grid">
+          <label>Competência
+            <input id="dre-filter-competencia" type="month" value="${escapeHtml(monthInputFromPeriod(state.dreFilters.competencia))}" />
+          </label>
+          <label>Destaque
+            <select id="dre-filter-destaque">
+              <option value="todos" ${state.dreFilters.destaque === 'todos' ? 'selected' : ''}>Todos os meses</option>
+              <option value="negativo" ${state.dreFilters.destaque === 'negativo' ? 'selected' : ''}>Somente resultado negativo</option>
+              <option value="positivo" ${state.dreFilters.destaque === 'positivo' ? 'selected' : ''}>Somente resultado positivo</option>
+            </select>
+          </label>
+        </div>
+        <div class="quick-actions-row top-gap">
+          <button class="mini-btn" id="dre-clear-filters-btn">Limpar filtros</button>
+          <button class="mini-btn" data-view-finance>Abrir financeiro</button>
+        </div>
+        <div class="upload-state">${state.dreMessage || 'DRE pronto para leitura executiva e comparação por competência.'}</div>
+      </article>
+      <article class="panel compact-panel">
+        <div class="panel-title">Leitura executiva</div>
+        <ul class="alert-list">
+          <li>${badge(`${summary.eventos} evento(s)`, 'ok')} Eventos já entram com receita, custo e margem por cliente.</li>
+          <li>${badge(`${summary.meses} mês(es)`, 'ok')} Competências consolidadas para visão gerencial.</li>
+          <li>${badge(summary.semCompetenciaInvestimentos ? money(summary.semCompetenciaInvestimentos) : 'R$ 0,00', summary.semCompetenciaInvestimentos ? 'warn' : 'ok')} Investimentos sem competência mensal cadastrada.</li>
+        </ul>
+      </article>
+    </section>
+
+    <section class="table-panel">
+      <div class="panel-title">DRE mensal</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Competência</th>
+            <th>Vendas</th>
+            <th>Custos</th>
+            <th>Despesas fixas</th>
+            <th>Investimentos</th>
+            <th>Resultado real</th>
+          </tr>
+        </thead>
+        <tbody>${monthlyTable || `<tr><td colspan="6"><div class="empty-state compact">Nenhuma competência encontrada com os filtros atuais.</div></td></tr>`}</tbody>
+      </table>
+    </section>
+
+    <section class="table-panel top-gap-lg">
+      <div class="panel-title">Resultado por evento</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Cliente</th>
+            <th>Unidade</th>
+            <th>Data</th>
+            <th>Vendas</th>
+            <th>Custo de evento</th>
+            <th>Lucro bruto</th>
+            <th>Margem</th>
+            <th>Recebido</th>
+            <th>A receber</th>
+          </tr>
+        </thead>
+        <tbody>${eventTable || `<tr><td colspan="9"><div class="empty-state compact">Nenhum evento encontrado para a competência selecionada.</div></td></tr>`}</tbody>
+      </table>
+    </section>
+  `;
+}
+
 function renderEvents() {
   const rows = appData.events.map(e => `
     <tr>
@@ -1548,6 +1906,7 @@ function renderApp() {
           ${navItem('inconsistencies', `Inconsistências${unresolvedInconsistencies().length ? ` (${unresolvedInconsistencies().length})` : ''}`)}
           ${navItem('governance', `Governança${getGovernanceMetrics().blockers ? ` (${getGovernanceMetrics().blockers})` : ''}`)}
           ${navItem('finance', `Financeiro${state.financialEntries.length ? ` (${state.financialEntries.length})` : ''}`)}
+          ${navItem('dre', 'DRE')}
         </nav>
       </aside>
       <main class="main-content">
@@ -1557,6 +1916,7 @@ function renderApp() {
         ${state.view === 'inconsistencies' ? renderInconsistencies() : ''}
         ${state.view === 'governance' ? renderGovernance() : ''}
         ${state.view === 'finance' ? renderFinance() : ''}
+        ${state.view === 'dre' ? renderDre() : ''}
       </main>
     </div>
     ${renderPreviewModal()}
@@ -1611,6 +1971,9 @@ function bindGlobalActions() {
       }
       if (state.view === 'finance' && canUseSupabase()) {
         loadFinancialEntries();
+      }
+      if (state.view === 'dre' && canUseSupabase()) {
+        loadDreSupportData();
       }
     });
   });
@@ -1718,6 +2081,23 @@ function bindGlobalActions() {
     });
   });
 
+  document.querySelectorAll('[data-view-dre]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.view = 'dre';
+      renderApp();
+      if (canUseSupabase()) loadDreSupportData();
+    });
+  });
+
+  document.querySelectorAll('[data-dre-set-negative]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.view = 'dre';
+      state.dreFilters.destaque = 'negativo';
+      renderApp();
+      if (canUseSupabase()) loadDreSupportData();
+    });
+  });
+
   document.querySelector('#dashboard-generate-receivables-inline')?.addEventListener('click', async () => {
     state.view = 'finance';
     renderApp();
@@ -1730,6 +2110,26 @@ function bindGlobalActions() {
 
   document.querySelector('#refresh-finance-btn')?.addEventListener('click', async () => {
     await loadFinancialEntries();
+  });
+
+  document.querySelector('#refresh-dre-btn')?.addEventListener('click', async () => {
+    await loadDreSupportData();
+  });
+
+  document.querySelector('#dre-filter-competencia')?.addEventListener('input', (event) => {
+    state.dreFilters.competencia = event.target.value;
+    renderApp();
+  });
+
+  document.querySelector('#dre-filter-destaque')?.addEventListener('change', (event) => {
+    state.dreFilters.destaque = event.target.value;
+    renderApp();
+  });
+
+  document.querySelector('#dre-clear-filters-btn')?.addEventListener('click', () => {
+    state.dreFilters.competencia = '';
+    state.dreFilters.destaque = 'todos';
+    renderApp();
   });
 
   document.querySelector('#generate-receivables-btn')?.addEventListener('click', async () => {
@@ -2488,9 +2888,34 @@ async function generateReceivablesFromEvents() {
   renderApp();
 }
 
+async function loadDreSupportData() {
+  if (!canUseSupabase()) return;
+  const supabase = getSupabase();
+  state.loadingDreData = true;
+  renderApp();
+
+  const [costsRes, fixedRes, investmentsRes] = await Promise.all([
+    supabase.from('custos_evento').select('evento_id, valor_real, data_lancamento, categoria'),
+    supabase.from('despesas_fixas').select('*'),
+    supabase.from('investimentos').select('*'),
+  ]);
+
+  state.loadingDreData = false;
+  state.dreCosts = costsRes.error ? [] : (costsRes.data || []);
+  state.dreFixedExpenses = fixedRes.error ? [] : (fixedRes.data || []);
+  state.dreInvestments = investmentsRes.error ? [] : (investmentsRes.data || []);
+
+  const messages = [];
+  if (costsRes.error) messages.push('custos_evento em fallback local');
+  if (fixedRes.error) messages.push('despesas_fixas em fallback local');
+  if (investmentsRes.error) messages.push('investimentos em fallback local');
+  state.dreMessage = messages.length ? `DRE carregado com fallback: ${messages.join(' • ')}.` : 'DRE carregado com base real do Supabase.';
+  renderApp();
+}
+
 async function boot() {
   if (canUseSupabase()) {
-    await Promise.all([loadDocuments(), loadEvents(), loadInconsistencies(), loadGovernance(), loadFinancialEntries()]);
+    await Promise.all([loadDocuments(), loadEvents(), loadInconsistencies(), loadGovernance(), loadFinancialEntries(), loadDreSupportData()]);
   }
   renderApp();
 }
