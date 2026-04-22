@@ -239,3 +239,29 @@ tbody tr:hover{background:rgba(255,255,255,.02)}
 .loading-block{opacity:.72}
 @media (max-width: 1080px){.dashboard-alert-grid{grid-template-columns:repeat(2,1fr)}}
 @media (max-width: 700px){.dashboard-alert-grid{grid-template-columns:1fr}.active-filter-banner,.timeline-head{flex-direction:column;align-items:flex-start}}
+
+
+.hero-card-priority.hero-critical{box-shadow:inset 0 0 0 1px rgba(255,107,107,.22), var(--shadow)}
+.hero-card-priority.hero-high{box-shadow:inset 0 0 0 1px rgba(247,201,93,.22), var(--shadow)}
+.hero-card-priority.hero-medium{box-shadow:inset 0 0 0 1px rgba(215,184,110,.22), var(--shadow)}
+.priority-banner{display:flex;justify-content:space-between;gap:18px;align-items:center;padding:20px 22px;border:1px solid var(--line);border-radius:24px;background:rgba(255,255,255,.03);margin:20px 0}
+.priority-banner h2{margin:6px 0 8px;font-size:28px}
+.priority-banner p{margin:0;color:var(--muted);max-width:760px}
+.priority-banner.tone-critical{border-color:rgba(255,107,107,.24);background:rgba(255,107,107,.08)}
+.priority-banner.tone-high{border-color:rgba(247,201,93,.24);background:rgba(247,201,93,.08)}
+.priority-banner.tone-medium{border-color:rgba(215,184,110,.24);background:rgba(215,184,110,.08)}
+.priority-banner.tone-ok{border-color:rgba(48,208,125,.18);background:rgba(48,208,125,.06)}
+.priority-banner-actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.priority-summary{min-width:120px;padding:14px 16px;border:1px solid var(--line);border-radius:18px;background:rgba(11,18,32,.5);display:flex;flex-direction:column;gap:6px}
+.priority-summary span,.muted-copy{color:var(--muted)}
+.priority-summary strong{font-size:28px}
+.quick-actions-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:16px;margin:18px 0 6px}
+.compact-panel{padding:18px}
+.quick-actions-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+.summary-list{display:grid;gap:12px;margin-top:10px}
+.summary-list div{display:flex;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--line)}
+.summary-list div:last-child{border-bottom:0}
+.summary-list span{color:var(--muted)}
+.alert-chip.low{border-color:rgba(255,255,255,.12);background:rgba(255,255,255,.05)}
+.alert-chip span{color:var(--muted)}
+@media (max-width: 1080px){.quick-actions-grid{grid-template-columns:1fr}.priority-banner{flex-direction:column;align-items:flex-start}.priority-banner h2{font-size:24px}}

@@ -226,6 +226,56 @@ function getInconsistencyMetrics() {
   }, { total: 0, abertas: 0, emAnalise: 0, resolvidas: 0, ignoradas: 0, prioridadeAlta: 0, criticas: 0, altas: 0, medias: 0, baixas: 0 });
 }
 
+function unresolvedInconsistencies() {
+  return state.inconsistencies.filter((item) => item.status !== 'resolvida' && item.status !== 'ignorada');
+}
+
+function getDashboardPriorityState() {
+  const unresolved = unresolvedInconsistencies();
+  const critical = unresolved.filter((item) => item.severidade === 'critica').length;
+  const high = unresolved.filter((item) => item.severidade === 'alta').length;
+  const medium = unresolved.filter((item) => item.severidade === 'media').length;
+  const low = unresolved.filter((item) => item.severidade === 'baixa').length;
+
+  if (critical) {
+    return {
+      tone: 'critical',
+      title: 'Atenção imediata',
+      text: `${critical} inconsistência(s) crítica(s) exigem ação agora. O sistema já está apontando risco operacional alto.`,
+      cta: 'Abrir críticas',
+      severity: 'critica',
+    };
+  }
+
+  if (high) {
+    return {
+      tone: 'high',
+      title: 'Prioridade alta ativa',
+      text: `${high} inconsistência(s) de alta prioridade precisam de tratamento antes de contaminar o fechamento.`,
+      cta: 'Abrir altas',
+      severity: 'alta',
+    };
+  }
+
+  if (medium) {
+    return {
+      tone: 'medium',
+      title: 'Pendências médias em aberto',
+      text: `${medium} inconsistência(s) médias seguem abertas e devem ser tratadas na rotina operacional.`,
+      cta: 'Abrir médias',
+      severity: 'media',
+    };
+  }
+
+  return {
+    tone: 'ok',
+    title: 'Painel operacional controlado',
+    text: low ? `${low} inconsistência(s) baixa(s) seguem monitoradas.` : 'Nenhuma inconsistência crítica, alta ou média aberta neste momento.',
+    cta: 'Ver central completa',
+    severity: '',
+  };
+}
+
 function confidenceTone(value) {
   const confidence = Number(value || 0);
   if (confidence >= 85) return 'ok';
@@ -454,8 +504,18 @@ function renderDashboard() {
   const m = appData.metrics;
   const inc = appData.inconsistencies;
   const connected = canUseSupabase();
+  const metrics = getInconsistencyMetrics();
+  const unresolved = unresolvedInconsistencies();
+  const priority = getDashboardPriorityState();
+  const unresolvedBySeverity = {
+    critica: unresolved.filter((item) => item.severidade === 'critica').length,
+    alta: unresolved.filter((item) => item.severidade === 'alta').length,
+    media: unresolved.filter((item) => item.severidade === 'media').length,
+    baixa: unresolved.filter((item) => item.severidade === 'baixa').length,
+  };
+
   return `
-    <section class="hero-card">
+    <section class="hero-card ${priority.tone !== 'ok' ? `hero-card-priority hero-${priority.tone}` : ''}">
       <div>
         <div class="eyebrow">Home Fest & Eventos</div>
         <h1>Painel financeiro executivo</h1>
@@ -467,6 +527,21 @@ function renderDashboard() {
           <strong class="${m.resultReal >= 0 ? 'positive' : 'negative'}">${money(m.resultReal)}</strong>
         </div>
         <div class="hero-note">Resultado Real = Vendas - Custos de Evento - Despesas Fixas - Investimentos</div>
+      </div>
+    </section>
+
+    <section class="priority-banner tone-${priority.tone}">
+      <div>
+        <div class="eyebrow">Radar operacional</div>
+        <h2>${priority.title}</h2>
+        <p>${priority.text}</p>
+      </div>
+      <div class="priority-banner-actions">
+        <div class="priority-summary">
+          <span>Em aberto</span>
+          <strong>${unresolved.length}</strong>
+        </div>
+        <button class="action-btn ${priority.tone === 'ok' ? 'ghost' : 'gold'}" ${priority.severity ? `data-dashboard-filter-severity="${priority.severity}"` : 'data-dashboard-go-inconsistencies'}>${priority.cta}</button>
       </div>
     </section>
 
@@ -497,12 +572,31 @@ function renderDashboard() {
       </article>
     </section>
 
-
     <section class="dashboard-alert-grid">
-      <button class="alert-chip critical" data-dashboard-filter-severity="critica">Críticas <strong>${state.inconsistencies.filter((item) => item.severidade === 'critica' && item.status !== 'resolvida').length}</strong></button>
-      <button class="alert-chip high" data-dashboard-filter-severity="alta">Altas <strong>${state.inconsistencies.filter((item) => item.severidade === 'alta' && item.status !== 'resolvida').length}</strong></button>
-      <button class="alert-chip medium" data-dashboard-filter-severity="media">Médias <strong>${state.inconsistencies.filter((item) => item.severidade === 'media' && item.status !== 'resolvida').length}</strong></button>
-      <button class="alert-chip neutral" data-dashboard-go-inconsistencies>Ver central completa</button>
+      <button class="alert-chip critical" data-dashboard-filter-severity="critica"><span>Críticas</span><strong>${unresolvedBySeverity.critica}</strong></button>
+      <button class="alert-chip high" data-dashboard-filter-severity="alta"><span>Altas</span><strong>${unresolvedBySeverity.alta}</strong></button>
+      <button class="alert-chip medium" data-dashboard-filter-severity="media"><span>Médias</span><strong>${unresolvedBySeverity.media}</strong></button>
+      <button class="alert-chip low" data-dashboard-filter-severity="baixa"><span>Baixas</span><strong>${unresolvedBySeverity.baixa}</strong></button>
+    </section>
+
+    <section class="quick-actions-grid">
+      <article class="panel compact-panel">
+        <div class="panel-title">Ação imediata</div>
+        <p class="muted-copy">Entre direto na central filtrada para tratar o que está aberto agora.</p>
+        <div class="quick-actions-row">
+          <button class="mini-btn" data-dashboard-go-status="aberta">Abertas (${metrics.abertas})</button>
+          <button class="mini-btn" data-dashboard-go-status="em_analise">Em análise (${metrics.emAnalise})</button>
+          <button class="mini-btn" data-dashboard-go-inconsistencies>Central completa</button>
+        </div>
+      </article>
+      <article class="panel compact-panel">
+        <div class="panel-title">Resumo do motor</div>
+        <div class="summary-list">
+          <div><span>Total monitorado</span><strong>${metrics.total}</strong></div>
+          <div><span>Resolvidas</span><strong class="positive">${metrics.resolvidas}</strong></div>
+          <div><span>Ignoradas</span><strong>${metrics.ignoradas}</strong></div>
+        </div>
+      </article>
     </section>
 
     <section class="panel-grid">
@@ -511,38 +605,17 @@ function renderDashboard() {
         <ul class="alert-list">
           <li>${badge(`${inc.eventosSemCustoReal.length} evento(s) sem custo real`, inc.eventosSemCustoReal.length ? 'warn' : 'ok')} ${inc.eventosSemCustoReal.join(', ') || 'Nenhum'}</li>
           <li>${badge(`${inc.investimentosSemValor.length} investimento(s) sem valor`, inc.investimentosSemValor.length ? 'warn' : 'ok')} ${inc.investimentosSemValor.slice(0,6).join(', ') || 'Nenhum'}</li>
-          <li>${badge(`${inc.eventosSemRecebimentoInformado.length} evento(s) sem caixa informado`, inc.eventosSemRecebimentoInformado.length ? 'warn' : 'ok')} ${inc.eventosSemRecebimentoInformado.join(', ') || 'Nenhum'}</li>
+          <li>${badge(`${inc.eventosSemRecebimentoInformado.length} evento(s) sem caixa informado`, inc.eventosSemRecebimentoInformado.length ? 'warn' : 'ok')} ${inc.eventosSemRecebimentoInformado.slice(0,6).join(', ') || 'Nenhum'}</li>
         </ul>
       </article>
       <article class="panel">
-        <div class="panel-title">Prontidão documental</div>
-        <div class="kv-list">
-          <div class="kv-row"><span>Upload múltiplo</span><strong>Ativo</strong></div>
-          <div class="kv-row"><span>Storage Supabase</span><strong>${connected ? 'Pronto para teste' : 'Aguardando chaves'}</strong></div>
-          <div class="kv-row"><span>Estados do documento</span><strong>Extraído • Sugerido • Confirmado</strong></div>
-          <div class="kv-row"><span>Lançamento automático</span><strong class="negative">Bloqueado</strong></div>
-        </div>
+        <div class="panel-title">O que o dashboard já controla</div>
+        <ul class="alert-list">
+          <li>${badge('Motor ativo', 'ok')} Contadores por severidade e atalhos clicáveis para a central.</li>
+          <li>${badge('Histórico', 'ok')} Cada mudança de status pode ser registrada e auditada.</li>
+          <li>${badge('Operação', unresolved.length ? 'warn' : 'ok')} Pendências abertas ficam visíveis logo no topo.</li>
+        </ul>
       </article>
-      <article class="panel">
-        <div class="panel-title">Motor de inconsistências</div>
-        <div class="kv-list">
-          <div class="kv-row"><span>Total rastreado</span><strong>${state.inconsistencies.length}</strong></div>
-          <div class="kv-row"><span>Abertas</span><strong class="negative">${state.inconsistencies.filter((item) => item.status === 'aberta').length}</strong></div>
-          <div class="kv-row"><span>Em análise</span><strong>${state.inconsistencies.filter((item) => item.status === 'em_analise').length}</strong></div>
-          <div class="kv-row"><span>Resolvidas</span><strong class="positive">${state.inconsistencies.filter((item) => item.status === 'resolvida').length}</strong></div>
-        </div>
-      </article>
-    </section>
-  `;
-}
-
-function renderConnectionWarning() {
-  if (canUseSupabase()) return '';
-  return `
-    <section class="panel panel-warning">
-      <div class="panel-title">Conectar sistema ao Supabase</div>
-      <p class="panel-copy">Para ativar documentos reais, preencha as chaves no arquivo <code>src/env.js</code> para teste local ou nas variáveis do Cloudflare Pages para produção.</p>
-      <div class="code-box">VITE_SUPABASE_URL<br/>VITE_SUPABASE_ANON_KEY<br/>VITE_SUPABASE_STORAGE_BUCKET=documentos-homefest</div>
     </section>
   `;
 }
@@ -972,7 +1045,7 @@ function renderApp() {
           ${navItem('dashboard', 'Dashboard')}
           ${navItem('events', 'Eventos')}
           ${navItem('documents', 'Documentos')}
-          ${navItem('inconsistencies', `Inconsistências${state.inconsistencies.filter((item) => item.status === 'aberta').length ? ` (${state.inconsistencies.filter((item) => item.status === 'aberta').length})` : ''}`)}
+          ${navItem('inconsistencies', `Inconsistências${unresolvedInconsistencies().length ? ` (${unresolvedInconsistencies().length})` : ''}`)}
         </nav>
       </aside>
       <main class="main-content">
@@ -1003,6 +1076,16 @@ function bindGlobalActions() {
   document.querySelectorAll('[data-dashboard-go-inconsistencies]').forEach((button) => {
     button.addEventListener('click', () => {
       state.view = 'inconsistencies';
+      renderApp();
+      if (canUseSupabase()) loadInconsistencies();
+    });
+  });
+
+  document.querySelectorAll('[data-dashboard-go-status]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.view = 'inconsistencies';
+      state.selectedDashboardSeverity = '';
+      state.inconsistencyFilters.status = button.dataset.dashboardGoStatus;
       renderApp();
       if (canUseSupabase()) loadInconsistencies();
     });
