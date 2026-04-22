@@ -46,6 +46,24 @@ const state = {
   loadingGovernance: false,
   governanceMessage: '',
   governanceNoteDraft: '',
+  financialEntries: [],
+  loadingFinancialEntries: false,
+  financialMessage: '',
+  financialFilters: {
+    tipo: 'todos',
+    status: 'todos',
+    competencia: '',
+    busca: '',
+  },
+  financialForm: {
+    tipo: 'pagar',
+    descricao: '',
+    cliente_fornecedor: '',
+    valor: '',
+    vencimento: '',
+    competencia: currentPeriodKey(),
+    status: 'pendente',
+  },
 };
 
 function money(v) { return BRL.format(Number(v || 0)); }
@@ -170,6 +188,120 @@ function getGovernanceTone() {
   if (metrics.high) return 'high';
   if (metrics.medium) return 'medium';
   return 'ok';
+}
+
+function currentCompetencia() {
+  return state.financialFilters?.competencia || currentPeriodKey();
+}
+
+function normalizeFinancialRow(row) {
+  const tipo = row.tipo || 'pagar';
+  const status = row.status || 'pendente';
+  const competencia = row.competencia || (row.vencimento ? String(row.vencimento).slice(0,7) : currentPeriodKey());
+  return {
+    id: row.id,
+    tipo,
+    descricao: row.descricao || 'Lançamento financeiro',
+    cliente_fornecedor: row.cliente_fornecedor || row.cliente || row.fornecedor || '',
+    valor: Number(row.valor || 0),
+    vencimento: row.vencimento || null,
+    competencia,
+    status,
+    conciliado: Boolean(row.conciliado),
+    conciliado_em: row.conciliado_em || null,
+    pago_recebido_em: row.pago_recebido_em || null,
+    origem_tipo: row.origem_tipo || '',
+    origem_id: row.origem_id || null,
+    evento_id: row.evento_id || null,
+    observacao: row.observacao || '',
+    criado_em: row.criado_em || row.created_at || null,
+    atualizado_em: row.atualizado_em || row.updated_at || null,
+  };
+}
+
+function financialStatusTone(status) {
+  if (status === 'conciliado') return 'ok';
+  if (status === 'recebido' || status === 'pago') return 'gold';
+  if (status === 'vencido') return 'danger';
+  return 'neutral';
+}
+
+function getFinancialEntriesFiltered() {
+  const { tipo, status, competencia, busca } = state.financialFilters;
+  const q = (busca || '').trim().toLowerCase();
+  return state.financialEntries.filter((item) => {
+    if (tipo !== 'todos' && item.tipo !== tipo) return false;
+    if (status !== 'todos' && item.status !== status) return false;
+    if (competencia && item.competencia !== competencia) return false;
+    if (q) {
+      const hay = `${item.descricao} ${item.cliente_fornecedor} ${item.origem_tipo} ${item.observacao}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function getFinancialMetrics() {
+  const rows = state.financialEntries;
+  return rows.reduce((acc, item) => {
+    const isReceber = item.tipo === 'receber';
+    const isPagar = item.tipo === 'pagar';
+    if (isReceber) acc.totalReceber += item.valor;
+    if (isPagar) acc.totalPagar += item.valor;
+    if (isReceber && (item.status === 'pendente' || item.status === 'vencido')) acc.receberPendente += item.valor;
+    if (isPagar && (item.status === 'pendente' || item.status === 'vencido')) acc.pagarPendente += item.valor;
+    if (item.status === 'recebido') acc.recebido += item.valor;
+    if (item.status === 'pago') acc.pago += item.valor;
+    if (item.status === 'conciliado') acc.conciliado += item.valor;
+    if (item.status === 'vencido') acc.vencidos += 1;
+    if (item.conciliado) acc.totalConciliados += 1;
+    if (!item.conciliado && (item.status === 'recebido' || item.status === 'pago')) acc.prontosParaConciliar += 1;
+    return acc;
+  }, {
+    totalReceber: 0,
+    totalPagar: 0,
+    receberPendente: 0,
+    pagarPendente: 0,
+    recebido: 0,
+    pago: 0,
+    conciliado: 0,
+    vencidos: 0,
+    totalConciliados: 0,
+    prontosParaConciliar: 0,
+  });
+}
+
+function monthInputFromPeriod(period) {
+  return /^\d{4}-\d{2}$/.test(period || '') ? period : '';
+}
+
+function statusLabelFinance(item) {
+  if (item.conciliado || item.status === 'conciliado') return 'conciliado';
+  return item.status.replaceAll('_',' ');
+}
+
+function syncFinancialFormCompetencia() {
+  if (!state.financialForm.competencia) state.financialForm.competencia = currentPeriodKey();
+}
+
+function buildReceivableFromEvent(evento) {
+  const cliente = evento.nome_cliente || evento.cliente || 'Cliente do evento';
+  const valor = Number(evento.valor_a_receber || 0);
+  if (!valor || valor <= 0) return null;
+  const competencia = evento.data_evento ? String(evento.data_evento).slice(0,7) : currentPeriodKey();
+  return {
+    tipo: 'receber',
+    descricao: `Recebimento pendente • ${cliente}`,
+    cliente_fornecedor: cliente,
+    valor,
+    vencimento: evento.data_evento || null,
+    competencia,
+    status: 'pendente',
+    origem_tipo: 'evento',
+    origem_id: evento.id,
+    evento_id: evento.id,
+    observacao: 'Gerado automaticamente a partir do saldo a receber do evento.',
+  };
 }
 
 
@@ -684,6 +816,28 @@ function renderDashboard() {
       </article>
     </section>
 
+    <section class="panel-grid finance-highlight">
+      <article class="panel compact-panel">
+        <div class="panel-title">Financeiro core</div>
+        <div class="summary-list">
+          <div><span>Lançamentos</span><strong>${state.financialEntries.length}</strong></div>
+          <div><span>A receber</span><strong class="positive">${money(getFinancialMetrics().receberPendente)}</strong></div>
+          <div><span>A pagar</span><strong class="negative">${money(getFinancialMetrics().pagarPendente)}</strong></div>
+        </div>
+        <div class="quick-actions-row top-gap">
+          <button class="mini-btn" data-view-finance>Abrir financeiro</button>
+          <button class="mini-btn" id="dashboard-generate-receivables-inline">Gerar recebíveis</button>
+        </div>
+      </article>
+      <article class="panel compact-panel">
+        <div class="panel-title">Conciliação</div>
+        <ul class="alert-list">
+          <li>${badge(`${getFinancialMetrics().prontosParaConciliar} pronto(s)`, getFinancialMetrics().prontosParaConciliar ? 'warn' : 'ok')} Pagamentos e recebimentos aguardando conciliação.</li>
+          <li>${badge(`${getFinancialMetrics().vencidos} vencido(s)`, getFinancialMetrics().vencidos ? 'danger' : 'ok')} Lançamentos que já passaram do prazo.</li>
+        </ul>
+      </article>
+    </section>
+
     <section class="panel-grid">
       <article class="panel">
         <div class="panel-title">Alertas de consistência</div>
@@ -1126,6 +1280,28 @@ function renderGovernance() {
       <article class="stat-card"><span>Fechado em</span><strong>${formatDateTime(governance.fechado_em)}</strong></article>
     </section>
 
+    <section class="panel-grid finance-highlight">
+      <article class="panel compact-panel">
+        <div class="panel-title">Financeiro core</div>
+        <div class="summary-list">
+          <div><span>Lançamentos</span><strong>${state.financialEntries.length}</strong></div>
+          <div><span>A receber</span><strong class="positive">${money(getFinancialMetrics().receberPendente)}</strong></div>
+          <div><span>A pagar</span><strong class="negative">${money(getFinancialMetrics().pagarPendente)}</strong></div>
+        </div>
+        <div class="quick-actions-row top-gap">
+          <button class="mini-btn" data-view-finance>Abrir financeiro</button>
+          <button class="mini-btn" id="dashboard-generate-receivables-inline">Gerar recebíveis</button>
+        </div>
+      </article>
+      <article class="panel compact-panel">
+        <div class="panel-title">Conciliação</div>
+        <ul class="alert-list">
+          <li>${badge(`${getFinancialMetrics().prontosParaConciliar} pronto(s)`, getFinancialMetrics().prontosParaConciliar ? 'warn' : 'ok')} Pagamentos e recebimentos aguardando conciliação.</li>
+          <li>${badge(`${getFinancialMetrics().vencidos} vencido(s)`, getFinancialMetrics().vencidos ? 'danger' : 'ok')} Lançamentos que já passaram do prazo.</li>
+        </ul>
+      </article>
+    </section>
+
     <section class="panel-grid">
       <article class="panel">
         <div class="panel-title">Resumo de bloqueio</div>
@@ -1172,6 +1348,147 @@ function renderGovernance() {
           </article>
         `).join('') : '<div class="empty-state">Nenhum bloqueio crítico aberto. O período pode avançar para fechamento quando a operação decidir.</div>'}
       </div>
+    </section>
+  `;
+}
+
+function renderFinance() {
+  syncFinancialFormCompetencia();
+  const metrics = getFinancialMetrics();
+  const rows = getFinancialEntriesFiltered();
+  const entries = rows.map((item) => `
+    <tr>
+      <td>${badge(item.tipo === 'receber' ? 'receber' : 'pagar', item.tipo === 'receber' ? 'ok' : 'warn')}</td>
+      <td>
+        <strong>${escapeHtml(item.descricao)}</strong>
+        <div class="table-subtitle">${escapeHtml(item.cliente_fornecedor || '-')}</div>
+      </td>
+      <td>${money(item.valor)}</td>
+      <td>${item.vencimento ? formatDateTime(`${item.vencimento}T12:00:00`) : '-'}</td>
+      <td>${formatPeriodLabel(item.competencia)}</td>
+      <td>${badge(statusLabelFinance(item), financialStatusTone(item.status))}</td>
+      <td>${item.conciliado ? badge('sim', 'ok') : badge('não', 'neutral')}</td>
+      <td>
+        <div class="table-actions">
+          ${item.tipo === 'pagar' ? `<button class="mini-btn" data-financial-status="pago" data-financial-id="${item.id}">Marcar pago</button>` : `<button class="mini-btn" data-financial-status="recebido" data-financial-id="${item.id}">Marcar recebido</button>`}
+          <button class="mini-btn" data-financial-status="pendente" data-financial-id="${item.id}">Voltar pendente</button>
+          <button class="mini-btn" data-financial-conciliate="${item.id}">${item.conciliado ? 'Reabrir conciliação' : 'Conciliar'}</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+
+  return `
+    <section class="page-head documents-head">
+      <div>
+        <div class="eyebrow">Financeiro core</div>
+        <h1>Contas a pagar, receber e conciliação</h1>
+        <p>Controle operacional do caixa real da Home Fest, com previsões, vencimentos e confirmação do que foi pago ou recebido.</p>
+      </div>
+      <div class="head-actions">
+        <button class="action-btn ghost" id="refresh-finance-btn">${state.loadingFinancialEntries ? 'Atualizando...' : 'Atualizar'}</button>
+        <button class="action-btn gold" id="generate-receivables-btn">Gerar contas a receber dos eventos</button>
+      </div>
+    </section>
+
+    ${renderConnectionWarning()}
+
+    <section class="stats-grid">
+      <article class="stat-card"><span>Total a receber</span><strong>${money(metrics.totalReceber)}</strong></article>
+      <article class="stat-card"><span>Total a pagar</span><strong>${money(metrics.totalPagar)}</strong></article>
+      <article class="stat-card"><span>Pendente a receber</span><strong class="positive">${money(metrics.receberPendente)}</strong></article>
+      <article class="stat-card"><span>Pendente a pagar</span><strong class="negative">${money(metrics.pagarPendente)}</strong></article>
+      <article class="stat-card"><span>Prontos para conciliar</span><strong>${metrics.prontosParaConciliar}</strong></article>
+      <article class="stat-card"><span>Vencidos</span><strong class="${metrics.vencidos ? 'negative' : 'positive'}">${metrics.vencidos}</strong></article>
+    </section>
+
+    <section class="panel-grid finance-grid">
+      <article class="panel compact-panel">
+        <div class="panel-title">Novo lançamento financeiro</div>
+        <div class="filters-grid finance-form-grid">
+          <label>Tipo
+            <select id="financial-form-tipo">
+              <option value="pagar" ${state.financialForm.tipo === 'pagar' ? 'selected' : ''}>Conta a pagar</option>
+              <option value="receber" ${state.financialForm.tipo === 'receber' ? 'selected' : ''}>Conta a receber</option>
+            </select>
+          </label>
+          <label>Descrição
+            <input id="financial-form-descricao" value="${escapeHtml(state.financialForm.descricao)}" placeholder="Ex.: Compra de insumos" />
+          </label>
+          <label>Cliente / fornecedor
+            <input id="financial-form-cliente" value="${escapeHtml(state.financialForm.cliente_fornecedor)}" placeholder="Nome do cliente ou fornecedor" />
+          </label>
+          <label>Valor
+            <input id="financial-form-valor" type="number" step="0.01" min="0" value="${escapeHtml(state.financialForm.valor)}" placeholder="0,00" />
+          </label>
+          <label>Vencimento
+            <input id="financial-form-vencimento" type="date" value="${escapeHtml(state.financialForm.vencimento)}" />
+          </label>
+          <label>Competência
+            <input id="financial-form-competencia" type="month" value="${escapeHtml(monthInputFromPeriod(state.financialForm.competencia))}" />
+          </label>
+        </div>
+        <div class="quick-actions-row top-gap">
+          <button class="action-btn gold" id="save-financial-entry-btn">Salvar lançamento</button>
+        </div>
+        <div class="upload-state">${state.financialMessage || 'Financeiro pronto para registrar contas e conciliar movimentações.'}</div>
+      </article>
+      <article class="panel compact-panel">
+        <div class="panel-title">Resumo do caixa operacional</div>
+        <div class="summary-list">
+          <div><span>Recebido</span><strong class="positive">${money(metrics.recebido)}</strong></div>
+          <div><span>Pago</span><strong class="negative">${money(metrics.pago)}</strong></div>
+          <div><span>Conciliado</span><strong>${money(metrics.conciliado)}</strong></div>
+          <div><span>Saldo líquido previsto</span><strong class="${(metrics.totalReceber - metrics.totalPagar) >= 0 ? 'positive' : 'negative'}">${money(metrics.totalReceber - metrics.totalPagar)}</strong></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Filtros do financeiro</div>
+      <div class="filters-grid">
+        <label>Tipo
+          <select id="financial-filter-tipo">
+            <option value="todos" ${state.financialFilters.tipo === 'todos' ? 'selected' : ''}>Todos</option>
+            <option value="pagar" ${state.financialFilters.tipo === 'pagar' ? 'selected' : ''}>Pagar</option>
+            <option value="receber" ${state.financialFilters.tipo === 'receber' ? 'selected' : ''}>Receber</option>
+          </select>
+        </label>
+        <label>Status
+          <select id="financial-filter-status">
+            <option value="todos" ${state.financialFilters.status === 'todos' ? 'selected' : ''}>Todos</option>
+            <option value="pendente" ${state.financialFilters.status === 'pendente' ? 'selected' : ''}>Pendente</option>
+            <option value="pago" ${state.financialFilters.status === 'pago' ? 'selected' : ''}>Pago</option>
+            <option value="recebido" ${state.financialFilters.status === 'recebido' ? 'selected' : ''}>Recebido</option>
+            <option value="conciliado" ${state.financialFilters.status === 'conciliado' ? 'selected' : ''}>Conciliado</option>
+            <option value="vencido" ${state.financialFilters.status === 'vencido' ? 'selected' : ''}>Vencido</option>
+          </select>
+        </label>
+        <label>Competência
+          <input id="financial-filter-competencia" type="month" value="${escapeHtml(monthInputFromPeriod(state.financialFilters.competencia))}" />
+        </label>
+        <label>Busca
+          <input id="financial-filter-busca" value="${escapeHtml(state.financialFilters.busca)}" placeholder="cliente, fornecedor, descrição..." />
+        </label>
+      </div>
+    </section>
+
+    <section class="table-panel">
+      <table>
+        <thead>
+          <tr>
+            <th>Tipo</th>
+            <th>Descrição</th>
+            <th>Valor</th>
+            <th>Vencimento</th>
+            <th>Competência</th>
+            <th>Status</th>
+            <th>Conciliação</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody>${entries || `<tr><td colspan="8"><div class="empty-state compact">Nenhum lançamento encontrado com os filtros atuais.</div></td></tr>`}</tbody>
+      </table>
     </section>
   `;
 }
@@ -1230,6 +1547,7 @@ function renderApp() {
           ${navItem('documents', 'Documentos')}
           ${navItem('inconsistencies', `Inconsistências${unresolvedInconsistencies().length ? ` (${unresolvedInconsistencies().length})` : ''}`)}
           ${navItem('governance', `Governança${getGovernanceMetrics().blockers ? ` (${getGovernanceMetrics().blockers})` : ''}`)}
+          ${navItem('finance', `Financeiro${state.financialEntries.length ? ` (${state.financialEntries.length})` : ''}`)}
         </nav>
       </aside>
       <main class="main-content">
@@ -1238,6 +1556,7 @@ function renderApp() {
         ${state.view === 'documents' ? renderDocuments() : ''}
         ${state.view === 'inconsistencies' ? renderInconsistencies() : ''}
         ${state.view === 'governance' ? renderGovernance() : ''}
+        ${state.view === 'finance' ? renderFinance() : ''}
       </main>
     </div>
     ${renderPreviewModal()}
@@ -1289,6 +1608,9 @@ function bindGlobalActions() {
       }
       if (state.view === 'governance' && canUseSupabase()) {
         loadGovernance();
+      }
+      if (state.view === 'finance' && canUseSupabase()) {
+        loadFinancialEntries();
       }
     });
   });
@@ -1388,8 +1710,83 @@ function bindGlobalActions() {
     });
   });
 
+  document.querySelectorAll('[data-view-finance]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.view = 'finance';
+      renderApp();
+      if (canUseSupabase()) loadFinancialEntries();
+    });
+  });
+
+  document.querySelector('#dashboard-generate-receivables-inline')?.addEventListener('click', async () => {
+    state.view = 'finance';
+    renderApp();
+    await generateReceivablesFromEvents();
+  });
+
   document.querySelector('#refresh-governance-btn')?.addEventListener('click', async () => {
     await loadGovernance();
+  });
+
+  document.querySelector('#refresh-finance-btn')?.addEventListener('click', async () => {
+    await loadFinancialEntries();
+  });
+
+  document.querySelector('#generate-receivables-btn')?.addEventListener('click', async () => {
+    await generateReceivablesFromEvents();
+  });
+
+  document.querySelector('#save-financial-entry-btn')?.addEventListener('click', async () => {
+    await createFinancialEntryFromForm();
+  });
+
+  document.querySelector('#financial-form-tipo')?.addEventListener('change', (event) => {
+    state.financialForm.tipo = event.target.value;
+  });
+  document.querySelector('#financial-form-descricao')?.addEventListener('input', (event) => {
+    state.financialForm.descricao = event.target.value;
+  });
+  document.querySelector('#financial-form-cliente')?.addEventListener('input', (event) => {
+    state.financialForm.cliente_fornecedor = event.target.value;
+  });
+  document.querySelector('#financial-form-valor')?.addEventListener('input', (event) => {
+    state.financialForm.valor = event.target.value;
+  });
+  document.querySelector('#financial-form-vencimento')?.addEventListener('input', (event) => {
+    state.financialForm.vencimento = event.target.value;
+    if (event.target.value && !state.financialForm.competencia) state.financialForm.competencia = event.target.value.slice(0,7);
+  });
+  document.querySelector('#financial-form-competencia')?.addEventListener('input', (event) => {
+    state.financialForm.competencia = event.target.value;
+  });
+
+  document.querySelector('#financial-filter-tipo')?.addEventListener('change', (event) => {
+    state.financialFilters.tipo = event.target.value;
+    renderApp();
+  });
+  document.querySelector('#financial-filter-status')?.addEventListener('change', (event) => {
+    state.financialFilters.status = event.target.value;
+    renderApp();
+  });
+  document.querySelector('#financial-filter-competencia')?.addEventListener('input', (event) => {
+    state.financialFilters.competencia = event.target.value;
+    renderApp();
+  });
+  document.querySelector('#financial-filter-busca')?.addEventListener('input', (event) => {
+    state.financialFilters.busca = event.target.value;
+    renderApp();
+  });
+
+  document.querySelectorAll('[data-financial-status]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await updateFinancialEntryStatus(button.dataset.financialId, button.dataset.financialStatus);
+    });
+  });
+
+  document.querySelectorAll('[data-financial-conciliate]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      await toggleFinancialConciliation(button.dataset.financialConciliate);
+    });
   });
 
   document.querySelector('#governance-note-text')?.addEventListener('input', (event) => {
@@ -1572,7 +1969,7 @@ async function loadEvents() {
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from('eventos')
-    .select('id, nome_cliente, cliente, data_evento, unidade, valor_vendido, status')
+    .select('id, nome_cliente, cliente, data_evento, unidade, valor_vendido, valor_a_receber, status')
     .order('data_evento', { ascending: true });
 
   if (!error) state.events = data || [];
@@ -1944,9 +2341,156 @@ async function closeGovernancePeriod() {
   renderApp();
 }
 
+async function loadFinancialEntries() {
+  if (!canUseSupabase()) return;
+  const supabase = getSupabase();
+  state.loadingFinancialEntries = true;
+  renderApp();
+  const { data, error } = await supabase
+    .from('financeiro_lancamentos')
+    .select('*')
+    .order('vencimento', { ascending: true })
+    .order('criado_em', { ascending: false });
+  state.loadingFinancialEntries = false;
+  if (error) {
+    state.financialMessage = `Falha ao carregar financeiro: ${error.message}`;
+    renderApp();
+    return;
+  }
+  const today = new Date().toISOString().slice(0,10);
+  state.financialEntries = (data || []).map(normalizeFinancialRow).map((item) => {
+    if (item.status === 'pendente' && item.vencimento && item.vencimento < today) {
+      return { ...item, status: 'vencido' };
+    }
+    return item;
+  });
+  state.financialMessage = 'Financeiro carregado com sucesso.';
+  renderApp();
+}
+
+async function persistFinancialEntry(payload) {
+  if (!canUseSupabase()) return { error: { message: 'Sem conexão com o Supabase.' } };
+  const supabase = getSupabase();
+  return supabase.from('financeiro_lancamentos').insert(payload).select('*').single();
+}
+
+async function createFinancialEntryFromForm() {
+  const form = state.financialForm;
+  const valor = Number(form.valor || 0);
+  if (!form.descricao.trim()) {
+    window.alert('Informe a descrição do lançamento.');
+    return;
+  }
+  if (!(valor > 0)) {
+    window.alert('Informe um valor válido para o lançamento.');
+    return;
+  }
+  const payload = {
+    tipo: form.tipo,
+    descricao: form.descricao.trim(),
+    cliente_fornecedor: form.cliente_fornecedor.trim(),
+    valor,
+    vencimento: form.vencimento || null,
+    competencia: form.competencia || (form.vencimento ? form.vencimento.slice(0,7) : currentPeriodKey()),
+    status: 'pendente',
+    conciliado: false,
+    origem_tipo: 'manual',
+    observacao: 'Lançamento criado manualmente pela operação.',
+  };
+  const { data, error } = await persistFinancialEntry(payload);
+  if (error) {
+    state.financialMessage = `Falha ao salvar lançamento: ${error.message}`;
+    renderApp();
+    return;
+  }
+  state.financialEntries = [normalizeFinancialRow(data), ...state.financialEntries];
+  state.financialForm = {
+    tipo: form.tipo,
+    descricao: '',
+    cliente_fornecedor: '',
+    valor: '',
+    vencimento: '',
+    competencia: currentPeriodKey(),
+    status: 'pendente',
+  };
+  state.financialMessage = 'Lançamento financeiro salvo com sucesso.';
+  renderApp();
+}
+
+async function updateFinancialEntryStatus(id, nextStatus) {
+  if (!canUseSupabase()) return;
+  const supabase = getSupabase();
+  const patch = {
+    status: nextStatus,
+    pago_recebido_em: nextStatus === 'pago' || nextStatus === 'recebido' ? new Date().toISOString() : null,
+    conciliado: nextStatus === 'pendente' ? false : undefined,
+    conciliado_em: nextStatus === 'pendente' ? null : undefined,
+  };
+  Object.keys(patch).forEach((k)=>patch[k]===undefined && delete patch[k]);
+  const { error } = await supabase.from('financeiro_lancamentos').update(patch).eq('id', id);
+  if (error) {
+    state.financialMessage = `Falha ao atualizar lançamento: ${error.message}`;
+    renderApp();
+    return;
+  }
+  state.financialEntries = state.financialEntries.map((item) => String(item.id) === String(id) ? normalizeFinancialRow({ ...item, ...patch }) : item);
+  state.financialMessage = `Lançamento atualizado para ${nextStatus}.`;
+  renderApp();
+}
+
+async function toggleFinancialConciliation(id) {
+  if (!canUseSupabase()) return;
+  const supabase = getSupabase();
+  const current = state.financialEntries.find((item) => String(item.id) === String(id));
+  if (!current) return;
+  const nextConciliado = !current.conciliado;
+  const patch = {
+    conciliado: nextConciliado,
+    conciliado_em: nextConciliado ? new Date().toISOString() : null,
+    status: nextConciliado ? 'conciliado' : (current.tipo === 'pagar' ? 'pago' : 'recebido'),
+  };
+  const { error } = await supabase.from('financeiro_lancamentos').update(patch).eq('id', id);
+  if (error) {
+    state.financialMessage = `Falha na conciliação: ${error.message}`;
+    renderApp();
+    return;
+  }
+  state.financialEntries = state.financialEntries.map((item) => String(item.id) === String(id) ? normalizeFinancialRow({ ...item, ...patch }) : item);
+  state.financialMessage = nextConciliado ? 'Lançamento conciliado com sucesso.' : 'Conciliação reaberta com sucesso.';
+  renderApp();
+}
+
+async function generateReceivablesFromEvents() {
+  if (!canUseSupabase()) return;
+  if (!state.events.length) await loadEvents();
+  const supabase = getSupabase();
+  const candidates = state.events.map(buildReceivableFromEvent).filter(Boolean);
+  if (!candidates.length) {
+    state.financialMessage = 'Nenhum evento com saldo a receber disponível para gerar contas.';
+    renderApp();
+    return;
+  }
+  const existingIds = new Set(state.financialEntries.filter((item) => item.origem_tipo === 'evento' && item.origem_id).map((item) => String(item.origem_id)));
+  const newRows = candidates.filter((item) => !existingIds.has(String(item.origem_id)));
+  if (!newRows.length) {
+    state.financialMessage = 'As contas a receber dos eventos já foram geradas anteriormente.';
+    renderApp();
+    return;
+  }
+  const { data, error } = await supabase.from('financeiro_lancamentos').insert(newRows).select('*');
+  if (error) {
+    state.financialMessage = `Falha ao gerar contas a receber: ${error.message}`;
+    renderApp();
+    return;
+  }
+  state.financialEntries = [...(data || []).map(normalizeFinancialRow), ...state.financialEntries];
+  state.financialMessage = `${newRows.length} conta(s) a receber gerada(s) a partir dos eventos.`;
+  renderApp();
+}
+
 async function boot() {
   if (canUseSupabase()) {
-    await Promise.all([loadDocuments(), loadEvents(), loadInconsistencies(), loadGovernance()]);
+    await Promise.all([loadDocuments(), loadEvents(), loadInconsistencies(), loadGovernance(), loadFinancialEntries()]);
   }
   renderApp();
 }
