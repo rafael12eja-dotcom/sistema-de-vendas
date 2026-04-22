@@ -100,3 +100,12 @@ Esse arquivo cria ou reforça colunas auxiliares na tabela `inconsistencias` e g
 
 ## Observação importante sobre o Supabase
 No SQL Editor, cole o conteúdo do arquivo `.sql`. Não execute o caminho do arquivo como se fosse um comando SQL.
+
+
+## Login multiusuário
+
+Antes de usar o login, rode no Supabase o arquivo `supabase/etapa00_login_multiplos_usuarios.sql`.
+
+Usuário inicial:
+- e-mail: `admin@homefest.local`
+- senha: `HomeFest2026!`

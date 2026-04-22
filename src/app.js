@@ -6,9 +6,18 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
 const FILE_TYPES = ['image/jpeg', 'image/png', 'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
 const FILE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'pdf', 'docx', 'xlsx'];
+const APP_SESSION_KEY = 'hf_fin_session_v1';
+const VIEW_IDS = ['dashboard', 'events', 'documents', 'inconsistencies', 'governance', 'finance', 'dre'];
+
 
 const state = {
-  view: 'dashboard',
+  view: getInitialView(),
+  auth: {
+    session: loadStoredSession(),
+    message: '',
+    submitting: false,
+    bootstrapChecked: false,
+  },
   supabase: null,
   documents: [],
   events: [],
@@ -102,6 +111,56 @@ function navItem(id, label) {
   return `<button class="${active}" data-view="${id}">${label}</button>`;
 }
 
+function getInitialView() {
+  const fromHash = String(window.location.hash || '').replace('#', '').trim();
+  return VIEW_IDS.includes(fromHash) ? fromHash : 'dashboard';
+}
+
+function syncHashWithView() {
+  const nextHash = `#${state.view}`;
+  if (window.location.hash !== nextHash) {
+    history.replaceState(null, '', nextHash);
+  }
+}
+
+function setView(view, { render = true, load = true } = {}) {
+  const nextView = VIEW_IDS.includes(view) ? view : 'dashboard';
+  state.view = nextView;
+  syncHashWithView();
+  if (render) renderApp();
+  if (load) hydrateView(nextView);
+}
+
+function loadStoredSession() {
+  try {
+    const raw = localStorage.getItem(APP_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || !parsed.email) return null;
+    return parsed;
+  } catch (error) {
+    return null;
+  }
+}
+
+function saveStoredSession(session) {
+  localStorage.setItem(APP_SESSION_KEY, JSON.stringify(session));
+}
+
+function clearStoredSession() {
+  localStorage.removeItem(APP_SESSION_KEY);
+}
+
+async function hashPassword(value) {
+  const data = new TextEncoder().encode(String(value || ''));
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function currentUserName() {
+  return state.auth.session?.nome || 'Operação Home Fest';
+}
+
 function canUseSupabase() {
   return Boolean(env.supabaseUrl && env.supabaseAnonKey);
 }
@@ -168,7 +227,7 @@ function normalizeGovernanceRow(row = {}) {
     status: row.status || 'aberto',
     bloqueado_por_inconsistencias: Boolean(row.bloqueado_por_inconsistencias),
     bloqueios_total: Number(row.bloqueios_total || 0),
-    responsavel: row.responsavel || 'Operação Home Fest',
+    responsavel: row.responsavel || currentUserName(),
     observacao: row.observacao || '',
     fechado_em: row.fechado_em || null,
     criado_em: row.criado_em || null,
@@ -503,7 +562,7 @@ function normalizeHistoryRow(row) {
     status_anterior: row.status_anterior || '',
     status_novo: row.status_novo || '',
     observacao: row.observacao || row.descricao || '',
-    responsavel: row.responsavel || row.autor || 'Operação Home Fest',
+    responsavel: row.responsavel || row.autor || currentUserName(),
     criado_em: row.criado_em || row.alterado_em || row.created_at || null,
   };
 }
@@ -513,7 +572,7 @@ function normalizeCommentRow(row) {
     id: row.id,
     inconsistencia_id: row.inconsistencia_id,
     comentario: row.comentario || row.texto || '',
-    responsavel: row.responsavel || row.autor || 'Operação Home Fest',
+    responsavel: row.responsavel || row.autor || currentUserName(),
     criado_em: row.criado_em || row.alterado_em || row.created_at || null,
   };
 }
@@ -546,7 +605,7 @@ function appendLocalComment(inconsistenciaId, comentario) {
     id: `local-c-${Date.now()}`,
     inconsistencia_id: inconsistenciaId,
     comentario,
-    responsavel: 'Operação Home Fest',
+    responsavel: currentUserName(),
     criado_em: new Date().toISOString(),
   });
   state.inconsistencyComments = [entry, ...state.inconsistencyComments].sort((a, b) => new Date(b.criado_em || 0) - new Date(a.criado_em || 0));
@@ -1330,7 +1389,7 @@ function renderInconsistencyModal() {
             <strong>${escapeHtml(historyLabel(entry))}</strong>
             <span>${formatDateTime(entry.criado_em)}</span>
           </div>
-          <div class="timeline-meta">${escapeHtml(entry.responsavel || 'Operação Home Fest')} • ${escapeHtml(entry.acao.replaceAll('_', ' '))}</div>
+          <div class="timeline-meta">${escapeHtml(entry.responsavel || currentUserName())} • ${escapeHtml(entry.acao.replaceAll('_', ' '))}</div>
           ${entry.observacao ? `<div class="timeline-note">${escapeHtml(entry.observacao)}</div>` : ''}
         </div>
       `).join('')
@@ -1340,7 +1399,7 @@ function renderInconsistencyModal() {
     ? state.inconsistencyComments.map((entry) => `
         <div class="comment-item">
           <div class="timeline-head">
-            <strong>${escapeHtml(entry.responsavel || 'Operação Home Fest')}</strong>
+            <strong>${escapeHtml(entry.responsavel || currentUserName())}</strong>
             <span>${formatDateTime(entry.criado_em)}</span>
           </div>
           <div class="timeline-note">${escapeHtml(entry.comentario)}</div>
@@ -1488,7 +1547,7 @@ function renderGovernance() {
       <article class="stat-card"><span>Status</span><strong>${governance.status.replaceAll('_', ' ')}</strong></article>
       <article class="stat-card"><span>Bloqueios críticos</span><strong class="${metrics.blockers ? 'negative' : 'positive'}">${metrics.blockers}</strong></article>
       <article class="stat-card"><span>Pendências abertas</span><strong>${metrics.unresolved}</strong></article>
-      <article class="stat-card"><span>Responsável</span><strong>${escapeHtml(governance.responsavel || 'Operação Home Fest')}</strong></article>
+      <article class="stat-card"><span>Responsável</span><strong>${escapeHtml(governance.responsavel || currentUserName())}</strong></article>
       <article class="stat-card"><span>Atualizado em</span><strong>${formatDateTime(governance.atualizado_em)}</strong></article>
       <article class="stat-card"><span>Fechado em</span><strong>${formatDateTime(governance.fechado_em)}</strong></article>
     </section>
@@ -1887,7 +1946,56 @@ function renderEvents() {
   `;
 }
 
+function renderLogin() {
+  const root = document.getElementById('app');
+  root.innerHTML = `
+    <div class="auth-shell">
+      <section class="auth-card">
+        <div class="auth-brand">
+          <div class="logo">HF</div>
+          <div>
+            <div class="brand-title">Home Fest</div>
+            <div class="brand-subtitle">Sistema financeiro • acesso multiusuário</div>
+          </div>
+        </div>
+        <div class="eyebrow">Login</div>
+        <h1>Acesse o sistema</h1>
+        <p class="panel-copy">Cada usuário terá seu próprio acesso. Nesta etapa, o login já está preparado para múltiplos usuários usando a tabela <code>public.app_usuarios</code> no Supabase.</p>
+        <form class="auth-form" id="login-form">
+          <label>
+            <span>E-mail</span>
+            <input id="login-email" type="email" placeholder="voce@homefest.com.br" required />
+          </label>
+          <label>
+            <span>Senha</span>
+            <input id="login-password" type="password" placeholder="Sua senha" required />
+          </label>
+          <button class="action-btn gold" type="submit">${state.auth.submitting ? 'Entrando...' : 'Entrar'}</button>
+        </form>
+        <div class="upload-state">${state.auth.message || 'Execute o SQL de login multiusuário no Supabase antes do primeiro acesso.'}</div>
+        <div class="auth-help">
+          <strong>Primeiro acesso</strong>
+          <p>Rode o arquivo <code>supabase/etapa00_login_multiplos_usuarios.sql</code> no SQL Editor do Supabase. Ele cria a tabela de usuários e já deixa um administrador inicial pronto para uso.</p>
+          <div class="code-box">
+            <div><strong>Usuário inicial:</strong> admin@homefest.local</div>
+            <div><strong>Senha inicial:</strong> HomeFest2026!</div>
+          </div>
+        </div>
+      </section>
+    </div>
+  `;
+
+  document.getElementById('login-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    await signInWithAppUser();
+  });
+}
+
 function renderApp() {
+  if (!state.auth.session) {
+    renderLogin();
+    return;
+  }
   const root = document.getElementById('app');
   root.innerHTML = `
     <div class="shell">
@@ -1898,6 +2006,13 @@ function renderApp() {
             <div class="brand-title">Home Fest</div>
             <div class="brand-subtitle">Sistema financeiro</div>
           </div>
+        </div>
+        <div class="user-chip">
+          <div>
+            <strong>${currentUserName()}</strong>
+            <span>${state.auth.session?.perfil || 'operacao'}</span>
+          </div>
+          <button class="mini-btn" id="logout-btn">Sair</button>
         </div>
         <nav class="nav">
           ${navItem('dashboard', 'Dashboard')}
@@ -1929,52 +2044,29 @@ function renderApp() {
 function bindGlobalActions() {
   document.querySelectorAll('[data-dashboard-filter-severity]').forEach((button) => {
     button.addEventListener('click', () => {
-      state.view = 'inconsistencies';
       state.selectedDashboardSeverity = button.dataset.dashboardFilterSeverity;
       state.inconsistencyFilters.severidade = button.dataset.dashboardFilterSeverity;
-      renderApp();
-      if (canUseSupabase()) loadInconsistencies();
+      setView('inconsistencies');
     });
   });
 
   document.querySelectorAll('[data-dashboard-go-inconsistencies]').forEach((button) => {
     button.addEventListener('click', () => {
-      state.view = 'inconsistencies';
-      renderApp();
-      if (canUseSupabase()) loadInconsistencies();
+      setView('inconsistencies');
     });
   });
 
   document.querySelectorAll('[data-dashboard-go-status]').forEach((button) => {
     button.addEventListener('click', () => {
-      state.view = 'inconsistencies';
       state.selectedDashboardSeverity = '';
       state.inconsistencyFilters.status = button.dataset.dashboardGoStatus;
-      renderApp();
-      if (canUseSupabase()) loadInconsistencies();
+      setView('inconsistencies');
     });
   });
 
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.addEventListener('click', () => {
-      state.view = button.dataset.view;
-      renderApp();
-      if (state.view === 'documents' && canUseSupabase()) {
-        loadDocuments();
-        loadEvents();
-      }
-      if (state.view === 'inconsistencies' && canUseSupabase()) {
-        loadInconsistencies();
-      }
-      if (state.view === 'governance' && canUseSupabase()) {
-        loadGovernance();
-      }
-      if (state.view === 'finance' && canUseSupabase()) {
-        loadFinancialEntries();
-      }
-      if (state.view === 'dre' && canUseSupabase()) {
-        loadDreSupportData();
-      }
+      setView(button.dataset.view);
     });
   });
 
@@ -2067,41 +2159,39 @@ function bindGlobalActions() {
   });
   document.querySelectorAll('[data-view-governance]').forEach((button) => {
     button.addEventListener('click', () => {
-      state.view = 'governance';
-      renderApp();
-      if (canUseSupabase()) loadGovernance();
+      setView('governance');
     });
   });
 
   document.querySelectorAll('[data-view-finance]').forEach((button) => {
     button.addEventListener('click', () => {
-      state.view = 'finance';
-      renderApp();
-      if (canUseSupabase()) loadFinancialEntries();
+      setView('finance');
     });
   });
 
   document.querySelectorAll('[data-view-dre]').forEach((button) => {
     button.addEventListener('click', () => {
-      state.view = 'dre';
-      renderApp();
-      if (canUseSupabase()) loadDreSupportData();
+      setView('dre');
     });
   });
 
   document.querySelectorAll('[data-dre-set-negative]').forEach((button) => {
     button.addEventListener('click', () => {
-      state.view = 'dre';
       state.dreFilters.destaque = 'negativo';
-      renderApp();
-      if (canUseSupabase()) loadDreSupportData();
+      setView('dre');
     });
   });
 
   document.querySelector('#dashboard-generate-receivables-inline')?.addEventListener('click', async () => {
-    state.view = 'finance';
-    renderApp();
+    setView('finance', { load: false });
     await generateReceivablesFromEvents();
+  });
+
+  document.getElementById('logout-btn')?.addEventListener('click', () => {
+    clearStoredSession();
+    state.auth.session = null;
+    state.auth.message = 'Sessão encerrada com sucesso.';
+    renderApp();
   });
 
   document.querySelector('#refresh-governance-btn')?.addEventListener('click', async () => {
@@ -2514,7 +2604,7 @@ async function saveHistoryRecord(inconsistenciaId, payload) {
   let result = await supabase.from('inconsistencias_historico').insert({
     inconsistencia_id: inconsistenciaId,
     ...payload,
-    responsavel: payload.responsavel || 'Operação Home Fest',
+    responsavel: payload.responsavel || currentUserName(),
   });
 
   if (result.error) {
@@ -2524,7 +2614,7 @@ async function saveHistoryRecord(inconsistenciaId, payload) {
       status_anterior: payload.status_anterior,
       status_novo: payload.status_novo,
       observacao: payload.observacao,
-      autor: payload.responsavel || 'Operação Home Fest',
+      autor: payload.responsavel || currentUserName(),
     });
   }
 
@@ -2549,7 +2639,7 @@ async function saveInconsistencyComment(id) {
   const payload = {
     inconsistencia_id: id,
     comentario: comment,
-    responsavel: 'Operação Home Fest',
+    responsavel: currentUserName(),
   };
 
   let result = await supabase.from('inconsistencias_comentarios').insert(payload);
@@ -2557,7 +2647,7 @@ async function saveInconsistencyComment(id) {
     result = await supabase.from('inconsistencias_comentarios').insert({
       inconsistencia_id: id,
       comentario: comment,
-      autor: 'Operação Home Fest',
+      autor: currentUserName(),
     });
   }
 
@@ -2605,7 +2695,7 @@ async function updateInconsistency(id, nextStatus, observation = '') {
   const richPatch = {
     status: nextStatus,
     observacao: observation,
-    responsavel: 'Operação Home Fest',
+    responsavel: currentUserName(),
   };
 
   if (nextStatus === 'resolvida') richPatch.resolvida_em = now;
@@ -2630,7 +2720,7 @@ async function updateInconsistency(id, nextStatus, observation = '') {
       ...item,
       status: nextStatus,
       observacao: observation || item.observacao,
-      responsavel: 'Operação Home Fest',
+      responsavel: currentUserName(),
       resolvida_em: nextStatus === 'resolvida' ? now : null,
     });
   });
@@ -2640,7 +2730,7 @@ async function updateInconsistency(id, nextStatus, observation = '') {
     status_anterior: current?.status || '',
     status_novo: nextStatus,
     observacao: observation,
-    responsavel: 'Operação Home Fest',
+    responsavel: currentUserName(),
   });
 
   state.inconsistencyActionMessage = `Inconsistência atualizada para ${nextStatus.replaceAll('_', ' ')}.`;
@@ -2694,7 +2784,7 @@ async function persistGovernance(extraPatch = {}) {
     status: state.governance.status || 'aberto',
     bloqueado_por_inconsistencias: metrics.blockers > 0,
     bloqueios_total: metrics.blockers,
-    responsavel: 'Operação Home Fest',
+    responsavel: currentUserName(),
     observacao: state.governance.observacao || '',
     ...extraPatch,
   };
@@ -2731,8 +2821,7 @@ async function closeGovernancePeriod() {
   const metrics = getGovernanceMetrics();
   if (metrics.blockers > 0) {
     state.governanceMessage = 'Não é possível fechar o período com inconsistências críticas abertas.';
-    state.view = 'governance';
-    renderApp();
+    setView('governance', { load: false });
     return;
   }
   state.governance.status = 'fechado';
@@ -2913,10 +3002,100 @@ async function loadDreSupportData() {
   renderApp();
 }
 
-async function boot() {
-  if (canUseSupabase()) {
-    await Promise.all([loadDocuments(), loadEvents(), loadInconsistencies(), loadGovernance(), loadFinancialEntries(), loadDreSupportData()]);
+async function hydrateView(view) {
+  if (!canUseSupabase() || !state.auth.session) return;
+  if (view === 'dashboard') {
+    await Promise.all([loadEvents(), loadDocuments(), loadInconsistencies(), loadGovernance(), loadFinancialEntries(), loadDreSupportData()]);
+    return;
   }
+  if (view === 'events') await loadEvents();
+  if (view === 'documents') await Promise.all([loadDocuments(), loadEvents()]);
+  if (view === 'inconsistencies') await loadInconsistencies();
+  if (view === 'governance') await loadGovernance();
+  if (view === 'finance') await loadFinancialEntries();
+  if (view === 'dre') await loadDreSupportData();
+}
+
+async function signInWithAppUser() {
+  if (!canUseSupabase()) {
+    state.auth.message = 'Supabase não configurado para login.';
+    renderLogin();
+    return;
+  }
+  const email = document.getElementById('login-email')?.value?.trim().toLowerCase() || '';
+  const password = document.getElementById('login-password')?.value || '';
+  if (!email || !password) {
+    state.auth.message = 'Informe e-mail e senha.';
+    renderLogin();
+    return;
+  }
+
+  state.auth.submitting = true;
+  state.auth.message = '';
+  renderLogin();
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from('app_usuarios')
+    .select('id,nome,email,perfil,status,senha_hash')
+    .eq('email', email)
+    .maybeSingle();
+
+  if (error) {
+    state.auth.submitting = false;
+    state.auth.message = `Falha ao validar login: ${error.message}`;
+    renderLogin();
+    return;
+  }
+
+  if (!data) {
+    state.auth.submitting = false;
+    state.auth.message = 'Usuário não encontrado.';
+    renderLogin();
+    return;
+  }
+
+  if ((data.status || 'ativo') !== 'ativo') {
+    state.auth.submitting = false;
+    state.auth.message = 'Usuário inativo.';
+    renderLogin();
+    return;
+  }
+
+  const passwordHash = await hashPassword(password);
+  if (String(passwordHash) !== String(data.senha_hash || '')) {
+    state.auth.submitting = false;
+    state.auth.message = 'Senha inválida.';
+    renderLogin();
+    return;
+  }
+
+  state.auth.session = {
+    id: data.id,
+    nome: data.nome || data.email,
+    email: data.email,
+    perfil: data.perfil || 'operacao',
+    login_em: new Date().toISOString(),
+  };
+  saveStoredSession(state.auth.session);
+  state.auth.submitting = false;
+  state.auth.message = '';
+  await hydrateView(state.view);
+  renderApp();
+}
+
+async function boot() {
+  window.addEventListener('hashchange', () => {
+    const next = getInitialView();
+    if (next !== state.view) {
+      setView(next);
+    }
+  });
+
+  if (state.auth.session) {
+    await hydrateView(state.view);
+  }
+
   renderApp();
 }
 
