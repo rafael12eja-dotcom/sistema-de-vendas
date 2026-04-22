@@ -96,3 +96,7 @@ Rode também:
 Esse arquivo cria ou reforça colunas auxiliares na tabela `inconsistencias` e garante as tabelas:
 - `inconsistencias_historico`
 - `inconsistencias_comentarios`
+
+
+## Observação importante sobre o Supabase
+No SQL Editor, cole o conteúdo do arquivo `.sql`. Não execute o caminho do arquivo como se fosse um comando SQL.

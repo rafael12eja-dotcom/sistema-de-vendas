@@ -118,8 +118,8 @@ function normalizeHistoryRow(row) {
     status_anterior: row.status_anterior || '',
     status_novo: row.status_novo || '',
     observacao: row.observacao || row.descricao || '',
-    responsavel: row.responsavel || 'Operação Home Fest',
-    criado_em: row.criado_em || row.created_at || null,
+    responsavel: row.responsavel || row.autor || 'Operação Home Fest',
+    criado_em: row.criado_em || row.alterado_em || row.created_at || null,
   };
 }
 
@@ -128,8 +128,8 @@ function normalizeCommentRow(row) {
     id: row.id,
     inconsistencia_id: row.inconsistencia_id,
     comentario: row.comentario || row.texto || '',
-    responsavel: row.responsavel || 'Operação Home Fest',
-    criado_em: row.criado_em || row.created_at || null,
+    responsavel: row.responsavel || row.autor || 'Operação Home Fest',
+    criado_em: row.criado_em || row.alterado_em || row.created_at || null,
   };
 }
 
@@ -1374,17 +1374,33 @@ async function loadInconsistencyDetail(id) {
   state.loadingInconsistencyDetail = true;
   renderApp();
 
-  const historyQuery = await supabase
+  let historyQuery = await supabase
     .from('inconsistencias_historico')
     .select('*')
     .eq('inconsistencia_id', id)
     .order('criado_em', { ascending: false });
 
-  const commentsQuery = await supabase
+  if (historyQuery.error) {
+    historyQuery = await supabase
+      .from('inconsistencias_historico')
+      .select('*')
+      .eq('inconsistencia_id', id)
+      .order('alterado_em', { ascending: false });
+  }
+
+  let commentsQuery = await supabase
     .from('inconsistencias_comentarios')
     .select('*')
     .eq('inconsistencia_id', id)
     .order('criado_em', { ascending: false });
+
+  if (commentsQuery.error) {
+    commentsQuery = await supabase
+      .from('inconsistencias_comentarios')
+      .select('*')
+      .eq('inconsistencia_id', id)
+      .order('created_at', { ascending: false });
+  }
 
   state.inconsistencyHistory = historyQuery.error ? [] : (historyQuery.data || []).map(normalizeHistoryRow);
   state.inconsistencyComments = commentsQuery.error ? [] : (commentsQuery.data || []).map(normalizeCommentRow);
@@ -1395,11 +1411,22 @@ async function loadInconsistencyDetail(id) {
 async function saveHistoryRecord(inconsistenciaId, payload) {
   if (!canUseSupabase()) return;
   const supabase = getSupabase();
-  const result = await supabase.from('inconsistencias_historico').insert({
+  let result = await supabase.from('inconsistencias_historico').insert({
     inconsistencia_id: inconsistenciaId,
     ...payload,
     responsavel: payload.responsavel || 'Operação Home Fest',
   });
+
+  if (result.error) {
+    result = await supabase.from('inconsistencias_historico').insert({
+      inconsistencia_id: inconsistenciaId,
+      acao: payload.acao,
+      status_anterior: payload.status_anterior,
+      status_novo: payload.status_novo,
+      observacao: payload.observacao,
+      autor: payload.responsavel || 'Operação Home Fest',
+    });
+  }
 
   if (result.error) {
     appendLocalHistory(inconsistenciaId, payload);
@@ -1425,10 +1452,18 @@ async function saveInconsistencyComment(id) {
     responsavel: 'Operação Home Fest',
   };
 
-  const result = await supabase.from('inconsistencias_comentarios').insert(payload);
+  let result = await supabase.from('inconsistencias_comentarios').insert(payload);
+  if (result.error) {
+    result = await supabase.from('inconsistencias_comentarios').insert({
+      inconsistencia_id: id,
+      comentario: comment,
+      autor: 'Operação Home Fest',
+    });
+  }
+
   if (result.error) {
     appendLocalComment(id, comment);
-    state.inconsistencyActionMessage = 'Comentário salvo localmente. Rode o SQL opcional para persistir no banco.';
+    state.inconsistencyActionMessage = 'Comentário salvo localmente. Estrutura do banco ainda não aceitou a persistência completa.';
   } else {
     state.inconsistencyActionMessage = 'Comentário operacional salvo com sucesso.';
   }
